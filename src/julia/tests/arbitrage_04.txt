@@ -1,0 +1,16 @@
+CURRENCIES =  ["USDT", "EUR", "POUND", "YEN", "HKDOLLAR", "SINGDOLLAR"]
+example_matrix = [1      1.1038  0.6888  1.19    7.8     1.8235;
+                  0.905  1       0.6241  1.0955  7.0801  1.6403;
+                  1.4501 1.6026  1       1.7705  11.32   2.6506;
+                  0.8893 0.9099  0.5677  1       6.43    1.4957;
+                  0.1282 0.1414  0.0883  0.1555  1       0.2328;
+                  0.5521 0.6098  0.3773  0.6681  4.3100  1     ]
+#=
+Arbitrage oportunity detected. API=0.002311
+Arbitrage orders: TRIANGULAR ROW
+EUR -> YEN -> USDT -> EUR : AER = 7.996%
+BUY  YEN/EUR(0.9099) in FRANK
+SELL YEN/USDT(0.8893) in NY
+BUY  EUR/USDT(0.905) in NY
+1/0.9099*0.8893/0.905 = 1.08
+=#
