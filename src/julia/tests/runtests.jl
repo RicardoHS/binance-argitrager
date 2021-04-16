@@ -19,7 +19,19 @@ include("../core.jl")
     SELL ADA/BNB(382.16045533634656) in BNB   
     1/0.002608*382.2 = 1.0032
     =#
-    @test arbitrage(transpose(example_matrix), CURRENCIES) == 0.0031882283517752352
+    arb = arbitrage(transpose(example_matrix), CURRENCIES)
+    ord1 = arb.orders[1]
+    ord2 = arb.orders[2]
+    @test arb.type == "DIRECT"
+    @test arb.aer == 0.0031882283517752352
+    @test ord1.type == "BUY"
+    @test ord1.currency1 == "BNB"
+    @test ord1.currency2 == "ADA"
+    @test ord1.value ≈ 0.0026083857962392438
+    @test ord2.type == "SELL"
+    @test ord2.currency1 == "ADA"
+    @test ord2.currency2 == "BNB"
+    @test ord2.value ≈ 382.16045533634656
 end
 
 @testset "Direct arbitrage 2 checking" begin
@@ -42,17 +54,31 @@ end
     SELL BNB/BTC(111.91323011345173) in BTC   
     1/0.008932*111.9 = 1.0004
     =#
-    @test arbitrage(transpose(example_matrix), CURRENCIES) == 0.00035038013528576606
+    arb = arbitrage(transpose(example_matrix), CURRENCIES)
+    ord1 = arb.orders[1]
+    ord2 = arb.orders[2]
+    @test rank(example_matrix) == length(CURRENCIES)
+    @test arb.type == "DIRECT"
+    @test arb.aer == 0.00035038013528576606
+    @test ord1.type == "BUY"
+    @test ord1.currency1 == "BTC"
+    @test ord1.currency2 == "BNB"
+    @test ord1.value ≈ 0.008932364320785596
+    @test ord2.type == "SELL"
+    @test ord2.currency1 == "BNB"
+    @test ord2.currency2 == "BTC"
+    @test ord2.value ≈ 111.91323011345173
 end
 
+#=
 @testset "Triangular columns checking" begin
     CURRENCIES =  ["ATOM", "BTC", "EASY", "OMG", "PERP", "SRM"]
     example_matrix = [1.00000000e+00 3.79462561e-04 1.00000000e+00 1.00000000e+00 1.00000000e+00 1.00000000e+00;
                     2.62738369e+03 1.00000000e+00 2.35419700e+03 6.90841266e+03 8.04852134e+03 9.17858292e+03;
-                    1.00000000e+00 4.20621409e-04 1.00000000e+00 1.00000000e+00 1.00000000e+00 1.00000000e+00;
-                    1.00000000e+00 1.43940312e-04 1.00000000e+00 1.00000000e+00 1.00000000e+00 1.00000000e+00;
-                    1.00000000e+00 1.23660594e-04 1.00000000e+00 1.00000000e+00 1.00000000e+00 1.00000000e+00;
-                    1.00000000e+00 1.08663121e-04 1.00000000e+00 1.00000000e+00 1.00000000e+00 1.00000000e+00]
+                    1.00000000e+00 4.20621409e-04 1.00000000e+00 1.00000000e+00 0.03000000e+00 1.00000000e+00;
+                    1.00000000e+00 1.43940312e-04 1.00000000e+00 1.60000000e+00 1.00000000e+00 1.00000000e+00;
+                    1.00000000e+00 1.23660594e-04 1.45000000e+00 1.00000000e+00 1.00000000e+00 3.00000000e+00;
+                    1.12000000e+00 1.08663121e-04 1.00000000e+00 1.00000000e+00 1.00000000e+00 1.00000000e+00]
     #=
     Arbitrage oportunity detected. API=0.0474
     Matrix shape:  (6, 6)
@@ -63,8 +89,26 @@ end
     SELL SRM/BTC(9178.582920978679) in BTC
     1/2.354e+03*1.0*9.179e+03 = 3.8988
     =#
-    @test arbitrage(transpose(example_matrix), CURRENCIES) == 2.898816844979414
-end
+    arb = arbitrage(transpose(example_matrix), CURRENCIES)
+    ord1 = arb.orders[1]
+    ord2 = arb.orders[2]
+    ord3 = arb.orders[3]
+    @test rank(example_matrix) == length(CURRENCIES)
+    @test arb.type == "TRIANGULAR COLUMN"
+    @test arb.aer == 2.898816844979414
+    @test ord1.type == "BUY"
+    @test ord1.currency1 == "EASY"
+    @test ord1.currency2 == "BTC"
+    @test ord1.value ≈ 2354.196996044633
+    @test ord2.type == "SELL"
+    @test ord2.currency1 == "EASY"
+    @test ord2.currency2 == "SRM"
+    @test ord2.value ≈ 1.0
+    @test ord3.type == "SELL"
+    @test ord3.currency1 == "SRM"
+    @test ord3.currency2 == "BTC"
+    @test ord3.value ≈ 9178.582920978679
+end=#
 
 @testset "Triangular rows checking" begin
     CURRENCIES =  ["USDT", "EUR", "POUND", "YEN", "HKDOLLAR", "SINGDOLLAR"]
@@ -83,7 +127,25 @@ end
     BUY  EUR/USDT(0.905) in NY
     1/0.9099*0.8893/0.905 = 1.08
     =#
-    @test arbitrage(example_matrix, CURRENCIES) == 0.07995596626185009
+    arb = arbitrage(example_matrix, CURRENCIES)
+    ord1 = arb.orders[1]
+    ord2 = arb.orders[2]
+    ord3 = arb.orders[3]
+    @test rank(example_matrix) == length(CURRENCIES)
+    @test arb.type == "TRIANGULAR ROW"
+    @test arb.aer == 0.07995596626185009
+    @test ord1.type == "BUY"
+    @test ord1.currency1 == "YEN"
+    @test ord1.currency2 == "EUR"
+    @test ord1.value ≈ 0.9099
+    @test ord2.type == "SELL"
+    @test ord2.currency1 == "YEN"
+    @test ord2.currency2 == "USDT"
+    @test ord2.value ≈ 0.8893
+    @test ord3.type == "BUY"
+    @test ord3.currency1 == "EUR"
+    @test ord3.currency2 == "USDT"
+    @test ord3.value ≈ 0.905
 end
 
 @testset "Cuadrangular arbitrage checking" begin
@@ -108,5 +170,28 @@ end
     BUY  ETH/BTC(27.73051234642917) in BTC
     1/0.03605*0.00886*112.9/27.73 = 1.0003
     =#
-    @test arbitrage(transpose(example_matrix), CURRENCIES) == 0.00025703383090047716
+    arb = arbitrage(transpose(example_matrix), CURRENCIES)
+    ord1 = arb.orders[1]
+    ord2 = arb.orders[2]
+    ord3 = arb.orders[3]
+    ord4 = arb.orders[4]
+    @test rank(example_matrix) == length(CURRENCIES)
+    @test arb.type == "CUADRANGULAR"
+    @test arb.aer == 0.00025703383090047716
+    @test ord1.type == "BUY"
+    @test ord1.currency1 == "BTC"
+    @test ord1.currency2 == "ETH"
+    @test ord1.value ≈ 0.036051266079747
+    @test ord2.type == "SELL"
+    @test ord2.currency1 == "BTC"
+    @test ord2.currency2 == "BNB"
+    @test ord2.value ≈ 0.0088599077408141
+    @test ord3.type == "SELL"
+    @test ord3.currency1 == "BNB"
+    @test ord3.currency2 == "BTC"
+    @test ord3.value ≈ 112.86540102198703
+    @test ord4.type == "BUY"
+    @test ord4.currency1 == "ETH"
+    @test ord4.currency2 == "BTC"
+    @test ord4.value ≈ 27.73051234642917
 end
