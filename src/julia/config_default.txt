@@ -1,0 +1,2 @@
+PUBLIC_KEY=aaaa
+SECRET_KEY=bbbb
