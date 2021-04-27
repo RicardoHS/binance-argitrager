@@ -2,6 +2,10 @@ using HTTP
 using StructTypes
 using JSON3
 using Dates
+using Printf
+using Nettle #for hashing algorithms
+
+api_config = Dict{String, String}()
 
 struct BinanceAPIOrderBookJSON
     lastUpdateId::Int64
@@ -30,14 +34,42 @@ struct BAPIResponseException <: Exception
     response::BinanceAPIResponse
 end
 
+function bapi_read_config()
+    lines = readlines(pwd() * "/src/julia/" * "./config.txt")
+    config_dict = Dict{String, String}()
+    for line in lines
+        k, v = split(line, "=")
+        config_dict[lowercase(k)] = v
+    end
+    global api_config = config_dict
+end
+
+function bapi_client_clock()
+    """
+    Get current local/client time in milliseconds::Int64
+    """
+    return round(Int64, time()*1000)
+end
+
 function bapi_endpoint()
-    url = "https://api.binance.com/api/v3/"
+    api_endpoint = "api" #api1 api2 api3
+    api_version = "v3"
+    url = "https://$api_endpoint.binance.com/api/$api_version/"
     return url
 end
 
-function bapi_get(url::String)
+function bapi_get(url::String, headers::Vector{Any}=[])
     time_i = now()
-    request = HTTP.request("GET", url)
+    request = HTTP.request("GET", url, headers)
+    time_e = now()
+    elapsed = time_e - time_i
+    timestamp = time_e - div(elapsed,2)
+    return request, timestamp, elapsed
+end
+
+function bapi_post(url::String, headers::Vector{Any}=[])
+    time_i = now()
+    request = HTTP.request("POST", url, headers)
     time_e = now()
     elapsed = time_e - time_i
     timestamp = time_e - div(elapsed,2)
@@ -73,4 +105,67 @@ function bapi_symbols()
     request = bapi_get_exchangeinfo()
     symbols = [[d["symbol"], d["baseAsset"], d["quoteAsset"]] for d in request["symbols"] if d["status"]=="TRADING"]
     return symbols
+end
+
+function bapi_keys()
+    public_key = api_config["public_key"]
+    secret_key = api_config["secret_key"]
+    return public_key, secret_key
+end
+
+function bapi_header_userinfo!(header::Vector{Any})
+    public_key, _ = bapi_keys()
+    user_api_key = ("X-MBX-APIKEY", public_key)
+    push!(header, user_api_key)
+    return header
+end
+
+function bapi_params_signature!(params)
+    public_key, secret_key = bapi_keys()
+    signature = hexdigest("sha256", secret_key, params)
+    return params * "&signature=" * signature
+end
+
+function bapi_get_accountinfo()
+    uri = "account"
+
+    timestamp = bapi_client_clock()
+    params = "timestamp=$timestamp"
+    params = bapi_params_signature!(params)
+    header = bapi_header_userinfo!([])
+
+    url = bapi_endpoint() * uri * "?" * params
+    request, timestamp, elapsed = bapi_get(url, header)
+    parsed_json = JSON3.read(request.body)
+    return parsed_json, timestamp, elapsed
+end
+
+function bapi_balances()
+    """
+    return all crypto assets balances where value different from 0
+    """
+    account_info, timestamp, _ = bapi_get_accountinfo()
+    return [x for x in account_info.balances if parse(Float64, x.free) != 0], timestamp
+end
+
+function bapi_post_order(symbol::String, side::String, quantity::Float64, test::Bool=true)
+    if test
+        uri = "order/test"
+    else
+        uri = "order/test"
+    end
+    type = "MARKET"
+    recvWindow = 1000 # milliseconds
+    quantity_str = @sprintf("%.8f",quantity)
+
+    timestamp = bapi_client_clock()
+    params = "type=$type&symbol=$symbol&side=$side&quantity=$quantity_str&recvWindow=$recvWindow&timestamp=$timestamp"
+    params = bapi_params_signature!(params)
+    header = bapi_header_userinfo!([])
+
+    url = bapi_endpoint() * uri * "?" * params
+    request, timestamp, elapsed = bapi_post(url, header)
+    parsed_json = JSON3.read(request.body)
+
+    return parsed_json, elapsed
 end
