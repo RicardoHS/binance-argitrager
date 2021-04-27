@@ -72,16 +72,16 @@ function arbitrage(cross_rates_matrix::Matrix, assets::Vector{String})
     api = compute_API(real(eigens.values[ncol]), ncol)
 
     if rank(cross_rates_matrix) != length(assets)
-        #println("NOT ARBITRAGE DETECTED, RANK(matrix) < LEN(assets)")
+        @debug "NOT ARBITRAGE DETECTED, RANK(matrix) < LEN(assets)"
         return nothing
     end
 
     if api > 0
-        #println("ARBITRAGE DETECTED, API=",api)
+        @debug "ARBITRAGE DETECTED, API=",api
         max_evector = eigens.vectors[:,ncol]
         return find_arbitrage_path(cross_rates_matrix, max_evector, assets)
     else
-        #println("NOT ARBITRAGE DETECTED, API=",api)
+        @debug "NOT ARBITRAGE DETECTED, API=",api
         return nothing
     end
 end

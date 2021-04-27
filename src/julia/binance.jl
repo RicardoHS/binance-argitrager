@@ -35,7 +35,9 @@ struct BAPIResponseException <: Exception
 end
 
 function bapi_read_config()
-    lines = readlines(pwd() * "/src/julia/" * "./config.txt")
+    config_file_path = pwd() * "/src/julia/" * "./config.txt"
+    @info "Reading Binance API configuration: ", config_file_path
+    lines = readlines(config_file_path)
     config_dict = Dict{String, String}()
     for line in lines
         k, v = split(line, "=")
