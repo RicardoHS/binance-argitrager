@@ -4,7 +4,7 @@ struct Order
     type::String
     asset1::String
     asset2::String
-    value::Float64
+    price::Float64
 end
 
 struct Arbitrage
@@ -72,16 +72,16 @@ function arbitrage(cross_rates_matrix::Matrix, assets::Vector{String})
     api = compute_API(real(eigens.values[ncol]), ncol)
 
     if rank(cross_rates_matrix) != length(assets)
-        println("NOT ARBITRAGE DETECTED, RANK(matrix) < LEN(assets)")
+        #println("NOT ARBITRAGE DETECTED, RANK(matrix) < LEN(assets)")
         return nothing
     end
 
     if api > 0
         #println("ARBITRAGE DETECTED, API=",api)
         max_evector = eigens.vectors[:,ncol]
-        find_arbitrage_path(cross_rates_matrix, max_evector, assets)
+        return find_arbitrage_path(cross_rates_matrix, max_evector, assets)
     else
-        println("NOT ARBITRAGE DETECTED, API=",api)
+        #println("NOT ARBITRAGE DETECTED, API=",api)
         return nothing
     end
 end
