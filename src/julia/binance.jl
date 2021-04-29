@@ -150,6 +150,24 @@ function bapi_balances()
     return [x for x in account_info.balances if parse(Float64, x.free) != 0], timestamp
 end
 
+function bapi_ws_subscribe_orderbook(symbol::String, channel::Channel, depth::Int=10)
+    """
+    Subscribe to an symbol order book and push updates to channel
+    """
+    try
+        HTTP.WebSockets.open("wss://stream.binance.com:9443/ws/$symbol@depth$depth@100ms") do ws
+            while !eof(ws)
+                res = JSON3.read(readavailable(ws), BinanceAPIOrderBookJSON)
+                put!(c, (res, now()))
+            end
+        end
+    catch err
+        @warn "Stoping websocket orderbook $symbol.", err
+        isa(err, InterruptException) || rethrow(err)
+        return 1
+    end
+end
+
 function bapi_post_order(symbol::String, side::String, quantity::Float64, test::Bool=true)
     if test
         uri = "order/test"
