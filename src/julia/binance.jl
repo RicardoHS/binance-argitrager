@@ -158,7 +158,7 @@ function bapi_ws_subscribe_orderbook(symbol::String, channel::Channel, depth::In
         HTTP.WebSockets.open("wss://stream.binance.com:9443/ws/$symbol@depth$depth@100ms") do ws
             while !eof(ws)
                 res = JSON3.read(readavailable(ws), BinanceAPIOrderBookJSON)
-                put!(c, (res, now()))
+                put!(c, (bapi_map_orderbook(res), now()))
             end
         end
     catch err
