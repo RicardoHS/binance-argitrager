@@ -15,6 +15,7 @@ end
 StructTypes.StructType(::Type{BinanceAPIOrderBookJSON}) = StructTypes.Struct()
 
 struct BinanceAPIOrderBook
+    symbol::String
     lastUpdateId::Int64
     bids::Matrix{Float64}
     asks::Matrix{Float64}
@@ -36,7 +37,7 @@ end
 
 function bapi_read_config()
     config_file_path = pwd() * "/src/julia/" * "./config.txt"
-    @info "Reading Binance API configuration: ", config_file_path
+    @info "Reading Binance API configuration: " config_file_path
     lines = readlines(config_file_path)
     config_dict = Dict{String, String}()
     for line in lines
@@ -78,12 +79,21 @@ function bapi_post(url::String, headers::Vector{Any}=[])
     return request, timestamp, elapsed
 end
 
-function bapi_map_orderbook(orderbook_json)
+function bapi_map_orderbook(symbol, orderbook_json)
     asks_v = map(x -> parse.(Float64, x), orderbook_json.asks)
     asks = transpose(hcat(asks_v...))
     bids_v = map(x -> parse.(Float64, x), orderbook_json.bids)
     bids = transpose(hcat(bids_v...))
-    return BinanceAPIOrderBook(orderbook_json.lastUpdateId, bids, asks)
+    return BinanceAPIOrderBook(symbol, orderbook_json.lastUpdateId, bids, asks)
+end
+
+function bapi_get_price(symbol::String)
+    uri = "ticker/price?symbol=$symbol"
+    url = bapi_endpoint() * uri
+    request, timestamp, elapsed = bapi_get(url)
+    parsed_json = JSON3.read(request.body)
+    headers = Dict(request.headers)
+    return BinanceAPIResponse(url, request.status, parsed_json, timestamp, elapsed, parse(Int32, headers["x-mbx-used-weight"]))
 end
 
 function bapi_get_orderbook(symbol::String, depth::Integer = 5)
@@ -91,7 +101,7 @@ function bapi_get_orderbook(symbol::String, depth::Integer = 5)
     url = bapi_endpoint() * uri
     request, timestamp, elapsed = bapi_get(url)
     parsed_json = JSON3.read(request.body, BinanceAPIOrderBookJSON)
-    response = bapi_map_orderbook(parsed_json)
+    response = bapi_map_orderbook(symbol, parsed_json)
     headers = Dict(request.headers)
     return BinanceAPIResponse(url, request.status, response, timestamp, elapsed, parse(Int32, headers["x-mbx-used-weight"]))
 end
@@ -154,15 +164,36 @@ function bapi_ws_subscribe_orderbook(symbol::String, channel::Channel, depth::In
     """
     Subscribe to an symbol order book and push updates to channel
     """
+    @debug "Starting websocket to fetch " * symbol * " orderbook."
     try
         HTTP.WebSockets.open("wss://stream.binance.com:9443/ws/$symbol@depth$depth@100ms") do ws
             while !eof(ws)
                 res = JSON3.read(readavailable(ws), BinanceAPIOrderBookJSON)
-                put!(c, (bapi_map_orderbook(res), now()))
+                put!(channel, (bapi_map_orderbook(symbol, res), now()))
             end
         end
     catch err
-        @warn "Stoping websocket orderbook $symbol.", err
+        @warn "Stoping websocket orderbook $symbol." err
+        isa(err, InterruptException) || rethrow(err)
+        return 1
+    end
+end
+
+function bapi_ws_subscribe_streams(url::String, channel::Channel)
+    """
+    Subscribe to multiple streams order book and push updates to channel
+    """
+    @debug "Starting websocket to fetch orderbook on stream." url
+    try
+        HTTP.WebSockets.open(url) do ws
+            while !eof(ws)
+                res = JSON3.read(readavailable(ws))
+                symbol = uppercase(split(res["stream"],"@")[1])
+                put!(channel, (bapi_map_orderbook(symbol, res["data"]), now()))
+            end
+        end
+    catch err
+        @warn "Stoping websocket orderbook stream." err
         isa(err, InterruptException) || rethrow(err)
         return 1
     end
