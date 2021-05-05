@@ -67,6 +67,10 @@ function find_arbitrage_path(A::Matrix, vecmax::Vector, assets::Vector{String})
 end
 
 function arbitrage(cross_rates_matrix::Matrix, assets::Vector{String})
+    if length(cross_rates_matrix) <= 2
+        @debug "NOT ARBITRAGE DETECTED, LENGTH(matrix) <= 2"
+        return nothing
+    end
     eigens = eigen(cross_rates_matrix)
     nrow, ncol = size(eigens.vectors)
     api = compute_API(real(eigens.values[ncol]), ncol)
