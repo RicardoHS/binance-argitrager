@@ -152,7 +152,7 @@ function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation)
         asset = pre_bal.asset
         new_free = post_balance_dict[asset].free - pre_bal.free
         new_locked = post_balance_dict[asset].locked - pre_bal.locked
-        new_aer = (new_free-pre_bal.free)/pre_bal.free
+        new_aer = new_free/pre_bal.free
         @info asset new_free new_locked new_aer
     end
 end
@@ -162,8 +162,9 @@ function make_arbitrage(arbitrage::ArbitrageIterative, engine::ArbitrageEngine, 
     recvWindow = engine.config["RECVWINDOW"]
     tasks = Task[]
     for order in arbitrage.orders
-        round_to = Integer(abs(floor(log10(parse(Float64, engine.filters[order.symbol]["LOT_SIZE"]["minQty"])))))
-        quantity = round(order.quantity, digits=round_to)
+        min_qty = engine.filters[order.symbol]["LOT_SIZE"]["minQty"]
+        round_to = Integer(abs(floor(log10(parse(Float64, min_qty)))))
+        quantity = max(min_qty, round(order.quantity, digits=round_to))
         push!(tasks, @async bapi_post_order(order.symbol, order.type, quantity, recvWindow, test))
     end
 
