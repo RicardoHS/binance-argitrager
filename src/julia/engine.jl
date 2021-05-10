@@ -1,5 +1,6 @@
 using Logging
 using Statistics
+using ConfParser
 
 include("core.jl")
 include("binance.jl")
@@ -158,7 +159,7 @@ end
 
 function make_arbitrage(arbitrage::ArbitrageIterative, engine::ArbitrageEngine, test::Bool = true)
     # Perform the BAPI calls and return operations when orders finish
-    recvWindow = engine.config["recvWindow"]
+    recvWindow = engine.config["RECVWINDOW"]
     tasks = Task[]
     for order in arbitrage.orders
         round_to = Integer(abs(floor(log10(parse(Float64, engine.filters[order.symbol]["LOT_SIZE"]["minQty"])))))
@@ -198,7 +199,7 @@ function get_balances()
 end
 
 function start_engine(config::Dict{Any, Any})
-    symbols_list = get_symbols(config["valid_symbols"])
+    symbols_list = get_symbols(config["SYMBOLS"])
     filters = bapi_get_filters([x.name for x in symbols_list])
     filters_dict = Dict([(x["symbol"],Dict([(f["filterType"],f) for f in x["filters"]])) for x in filters])
 
@@ -224,9 +225,6 @@ function start_engine(config::Dict{Any, Any})
 end
 
 function engine_read_config(logging_file::String)
-    @info "Reading engine configuration. HARDCODED"
-    config = Dict()
-
     if logging_file != ""
         @info "Starting to write logs in file: " logging_file
         io = open(logging_file, "w+")
@@ -236,14 +234,20 @@ function engine_read_config(logging_file::String)
         io = Channel()
     end
 
-    config["order_fee"] = 0.00075 # TODO check if this value match the calculated fees
-    config["security_profit"] = 0.001 # 0.1%
-    config["order_maxage"] = 100 # milliseconds
-    config["recvWindow"] = 1000 # milliseconds
+    config = Dict()
+    config_file_path = pwd() * "/src/julia/" * "./config.ini"
+    @info "Reading engine configuration." config_file_path
+    conf = ConfParse(config_file_path)
+    parse_conf!(conf)
+
+    config["ORDER_FEE"] = parse(Float64, retrieve(conf, "engine", "ORDER_FEE")) # 0.075%
+    config["SECURITY_PROFIT"] = parse(Float64, retrieve(conf, "engine", "SECURITY_PROFIT")) # 0.1%
+    config["ORDER_MAXAGE"] = parse(Int64, retrieve(conf, "engine", "ORDER_MAXAGE")) # milliseconds
+    config["RECVWINDOW"] = parse(Int64, retrieve(conf, "engine", "RECVWINDOW")) # milliseconds
     config["io"] = io
 
-    config["MIN_NOTIONAL_MULTIPLIER"] = 1000
-    config["valid_symbols"] = ["EUR", "USDT", "BTC", "ETH", "BNB", "DOGE", "ADA", "XRP", "DOT", "BCH", "LTC", "LINK"]
+    config["MIN_NOTIONAL_MULTIPLIER"] = parse(Int64, retrieve(conf, "engine", "MIN_NOTIONAL_MULTIPLIER"))
+    config["SYMBOLS"] = retrieve(conf, "engine", "SYMBOLS")
 
     return config
 end
@@ -262,8 +266,8 @@ function main()
     config = engine_read_config(logging_file)
     bapi_read_config()
 
-    order_fee = config["order_fee"]
-    security_profit = config["security_profit"]
+    order_fee = config["ORDER_FEE"]
+    security_profit = config["SECURITY_PROFIT"]
     engine = start_engine(config)
 
     last_balance = get_balances()
@@ -272,7 +276,7 @@ function main()
     try 
         while true
             timings.c_main_loop = time_microsec()
-            buysell_matrix, assets = get_buysell_matrix(engine, Millisecond(config["order_maxage"]))
+            buysell_matrix, assets = get_buysell_matrix(engine, Millisecond(config["ORDER_MAXAGE"]))
             symbols = [x.symbol for x in collect(values(engine.symbol_dict)) if x.symbol.asset1 in assets && x.symbol.asset2 in assets]
             if length(symbols) < 3
                 iteration_sleep()

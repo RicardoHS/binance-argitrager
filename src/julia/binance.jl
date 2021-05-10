@@ -36,14 +36,15 @@ struct BAPIResponseException <: Exception
 end
 
 function bapi_read_config()
-    config_file_path = pwd() * "/src/julia/" * "./config.txt"
+    config_file_path = pwd() * "/src/julia/" * "./config.ini"
     @info "Reading Binance API configuration: " config_file_path
-    lines = readlines(config_file_path)
+    conf = ConfParse(config_file_path)
+    parse_conf!(conf)
+
     config_dict = Dict{String, String}()
-    for line in lines
-        k, v = split(line, "=")
-        config_dict[lowercase(k)] = v
-    end
+    config_dict["PUBLIC_KEY"] = retrieve(conf, "bapi", "PUBLIC_KEY")
+    config_dict["SECRET_KEY"] = retrieve(conf, "bapi", "SECRET_KEY")
+
     global api_config = config_dict
 end
 
@@ -137,8 +138,8 @@ function bapi_symbols()
 end
 
 function bapi_keys()
-    public_key = api_config["public_key"]
-    secret_key = api_config["secret_key"]
+    public_key = api_config["PUBLIC_KEY"]
+    secret_key = api_config["SECRET_KEY"]
     return public_key, secret_key
 end
 
