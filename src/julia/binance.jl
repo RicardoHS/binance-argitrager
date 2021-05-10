@@ -221,7 +221,7 @@ function bapi_post_order(symbol::String, side::String, quantity::Float64, recvWi
     if test
         uri = "order/test"
     else
-        uri = "order/test"
+        uri = "order"
     end
     type = "MARKET"
     quantity_str = @sprintf("%.8f",quantity)

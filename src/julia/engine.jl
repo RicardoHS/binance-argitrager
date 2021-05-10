@@ -262,7 +262,7 @@ function time_microsec()
     time_ns()*1e-3
 end
 
-function main()
+function main(test::Bool=true)
     logging_file = ""#"engine.debug"
     config = engine_read_config(logging_file)
     bapi_read_config()
@@ -298,12 +298,12 @@ function main()
             if aer - arbitrage_fees >= security_profit
                 @info string("Arbitrage detected. Expected AER=",round((aer - arbitrage_fees)*100, digits=2),"%") detected_arbitrage
                 
-                operations = make_arbitrage(detected_arbitrage, engine)
+                operations = make_arbitrage(detected_arbitrage, engine, test)
                 new_balance = get_balances()
                 arbitrage_operation = ArbitrageOperation(detected_arbitrage, last_balance, new_balance, operations)
                 analyse_arbitrage_operation(arbitrage_operation)
                 last_balance = new_balance
-                #break
+                break
             else
                 @info "Arbitrage insecure." aer arbitrage_fees aer-arbitrage_fees security_profit aer - arbitrage_fees >= security_profit
             end
