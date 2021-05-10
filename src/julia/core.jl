@@ -1,97 +1,107 @@
-using LinearAlgebra
-
-struct Order
-    type::String
+struct ExchangeSymbol
+    name::String
     asset1::String
     asset2::String
-    price::Float64
 end
 
-struct Arbitrage
+struct OrderSymbol
     type::String
-    orders::Vector{Order}
-    aer::Float64
+    symbol::String
+    price::Float64
+    quantity::Float64
 end
 
-
-function compute_API(lambda_max::Real, n::Integer)
-    return abs(lambda_max-n)/(n-1)
+struct ArbitrageIterative
+    type::String
+    orders::Vector{OrderSymbol}
+    aer::Float64
 end
 
 function mean_weighted(a::Vector{Float64}, weights::Vector{Float64})
     return sum(a .* weights) / sum(weights)
 end
 
-function find_arbitrage_path(A::Matrix, vecmax::Vector, assets::Vector{String})
-    divide(i,j) = i/j
-    vecmax = real(vecmax)
-    B = [divide(i, j) for i in vecmax, j in vecmax]
-    C = A ./ B
+function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, symbols::Vector{ExchangeSymbol}, initial_quantities::Dict{String, Float64})
+    assets_dict = Dict([(a,i) for (i, a) in enumerate(assets)])
+    v1 = [assets_dict[s.asset1] for s in symbols]
+    v2 = [assets_dict[s.asset2] for s in symbols]
 
-    C_max = argmax(C)
-    C_min = argmin(C)
-    orders = []
+    arbitrages = []
+    for (i1, a1) in enumerate(v1)
+        for (i2, b2) in enumerate(v2)
+            if a1 == b2
+                b1 = v2[i1]
+                a2 = v1[i2]
+                for i3 in 1:length(v1)
+                    #if v1[i3]==b1 && v2[i3]==a2
+                    #    orders = OrderSymbol[]
+                    #    prices = [buysell_matrix[a1,b1], buysell_matrix[a2,b2], buysell_matrix[b1,a2]]
+                    #    if prod(prices) == 0
+                    #        continue
+                    #    end
+                    #    initial_quantity = initial_quantities[symbols[i1].name]
+                    #    push!(orders, OrderSymbol("BUY", symbols[i1].name, prices[1], initial_quantity))
+                    #    push!(orders, OrderSymbol("SELL", symbols[i2].name, prices[2], initial_quantity / prices[1]))
+                    #    push!(orders, OrderSymbol("BUY", symbols[i3].name, prices[3], initial_quantity / prices[1] * prices[2]))
+                    #    aer = 1 / prices[1] * prices[2] * 1 /  prices[3] -1
+                    #    push!(arbitrages, ArbitrageIterative("BSB", orders, aer))
 
-    if C_max[1]==C_min[2] && C_max[2]==C_min[1]
-        # Direct arbitrage
-        push!(orders, Order("BUY", assets[C_min[1]], assets[C_min[2]], A[C_min]))
-        push!(orders, Order("SELL", assets[C_max[1]], assets[C_min[1]], A[C_max[1],C_min[1]]))
-        aer = 1 / ( C[C_min] * C[C_max] ) - 1
-        return Arbitrage("DIRECT", orders, aer)
-    elseif C_max[1]==C_min[1] || C_max[2]==C_min[2]
-        # Triangular arbitrage
-        if C_max[1]==C_min[1]
-            # Arbitrage elements in the same row
-            push!(orders, Order("BUY", assets[C_min[1]], assets[C_min[2]], A[C_min]))
-            push!(orders, Order("SELL", assets[C_min[1]], assets[C_max[2]], A[C_min[1],C_max[2]]))
-            push!(orders, Order("BUY", assets[C_min[2]], assets[C_max[2]], A[C_min[2],C_max[2]]))
-            aer = 1 / C[C_min] * C[C_min[1],C_max[2]] / C[C_min[2],C_max[2]] - 1
-            return Arbitrage("TRIANGULAR ROW", orders, aer)
-        else # C_max[2]==C_min[2] 
-            # Arbitrage elements in the same col
-            push!(orders, Order("BUY", assets[C_min[1]], assets[C_min[2]], A[C_min]))
-            push!(orders, Order("SELL", assets[C_min[1]], assets[C_max[1]], A[C_min[1],C_max[1]]))
-            push!(orders, Order("SELL", assets[C_max[1]], assets[C_min[2]], A[C_max[2],C_min[2]]))
-            aer = 1 / C[C_min] * C[C_min[1],C_max[1]] * C[C_max] - 1
-            return Arbitrage("TRIANGULAR COLUMN", orders, aer)
+                    if v1[i3]==a2 && v2[i3]==b1
+                        orders = OrderSymbol[]
+                        prices = [buysell_matrix[a1,b1], buysell_matrix[a2,b2], buysell_matrix[b1,a2]]
+                        if prod(prices) == 0
+                            continue
+                        end
+                        initial_quantity = initial_quantities[symbols[i1].name]
+                        push!(orders, OrderSymbol("BUY", symbols[i1].name, prices[1], initial_quantity))
+                        push!(orders, OrderSymbol("BUY", symbols[i2].name, prices[2], (1/prices[2]) * initial_quantity ))
+                        push!(orders, OrderSymbol("SELL", symbols[i3].name, prices[3], prices[3] * (1/prices[2]) * initial_quantity ))
+                        aer = 1 / prices[1] * 1 / prices[2] * prices[3] -1
+                        push!(arbitrages, ArbitrageIterative("BBS", orders, aer))
+
+                    end
+                end
+            end
         end
-    else
-        # Cuadrangular arbitrage
-        push!(orders, Order("BUY", assets[C_min[1]], assets[C_min[2]], A[C_min]))
-        push!(orders, Order("SELL", assets[C_min[1]], assets[C_max[1]], A[C_min[1],C_max[1]]))
-        push!(orders, Order("SELL", assets[C_max[1]], assets[C_max[2]], A[C_max[1],C_max[2]]))
-        push!(orders, Order("BUY", assets[C_min[2]], assets[C_max[2]], A[C_min[2],C_max[2]]))
-        aer = 1 / C[C_min] * C[C_min[1],C_max[1]] * C[C_max] / C[C_min[2],C_max[2]] - 1
-        return Arbitrage("CUADRANGULAR", orders, aer)
     end
+    if length(arbitrages)==0
+        return nothing
+    end
+    return sort(arbitrages, rev=true, by = x -> x.aer)[1]
 end
-
-function arbitrage(cross_rates_matrix::Matrix, assets::Vector{String})
-    if length(cross_rates_matrix) <= 2
-        @debug "NOT ARBITRAGE DETECTED, LENGTH(matrix) <= 2"
-        return nothing
-    end
-    eigens = eigen(cross_rates_matrix)
-    nrow, ncol = size(eigens.vectors)
-    api = compute_API(real(eigens.values[ncol]), ncol)
-
-    if rank(cross_rates_matrix) != length(assets)
-        @debug "NOT ARBITRAGE DETECTED, RANK(matrix) < LEN(assets)"
-        return nothing
-    end
-
-    if api > 0
-        @debug "ARBITRAGE DETECTED, API=",api
-        max_evector = eigens.vectors[:,ncol]
-        return find_arbitrage_path(cross_rates_matrix, max_evector, assets)
-    else
-        @debug "NOT ARBITRAGE DETECTED, API=",api
-        return nothing
-    end
-end
-
-# transpose to inverse the arbitrage direction. 
-# Need to study this, sometimes the aer is 0 in
-# one direction but positive or different in the
-# other direction. Probable because rank
-#arb = arbitrage(transpose(example_matrix), CURRENCIES)
+#
+#buysell_matrix = [0.0 47884.9783130283 551.8396526652529 3385.9272305965633 0.43408167297282474 1.211898353192841; 
+#                  47870.58738979748 0.0 0.011524124404551 0.07071986537108689 9.118672906923945e-6 58036.063105138026; 
+#                  551.3417633291331 0.011508675554448044 0.0 0.16263517973045394 0.0 668.4581801499872; 
+#                  3384.2398435460764 0.07067921368801197 0.16304352523635612 0.0 0.0 4103.975922570707; 
+#                  0.43304520123747925 8.997305627691597e-6 0.0 0.0 0.0 0.5252814030882852; 
+#                  1.2124627046708885 58043.98293187449 668.6770033462739 4104.379033559045 0.5258406160535631 0.0]
+#assets = ["EUR", "BTC", "BNB", "ETH", "DOGE", "USDT"]
+#symbols = ExchangeSymbol[ExchangeSymbol("DOGEEUR", "DOGE", "EUR"), 
+#                         ExchangeSymbol("BTCEUR", "BTC", "EUR"), 
+#                         ExchangeSymbol("BNBETH", "BNB", "ETH"), 
+#                         ExchangeSymbol("BNBBTC", "BNB", "BTC"), 
+#                         ExchangeSymbol("ETHBTC", "ETH", "BTC"), 
+#                         ExchangeSymbol("BNBUSDT", "BNB", "USDT"), 
+#                         ExchangeSymbol("DOGEBTC", "DOGE", "BTC"), 
+#                         ExchangeSymbol("EURUSDT", "EUR", "USDT"), 
+#                         ExchangeSymbol("ETHUSDT", "ETH", "USDT"), 
+#                         ExchangeSymbol("ETHEUR", "ETH", "EUR"), 
+#                         ExchangeSymbol("BTCUSDT", "BTC", "USDT"), 
+#                         ExchangeSymbol("DOGEUSDT", "DOGE", "USDT"), 
+#                         ExchangeSymbol("BNBEUR", "BNB", "EUR")]
+#safe_quantities = Dict("BNBEUR" => 0.001, 
+#                       "BTCEUR" => 9.999999999999999e-6, 
+#                       "BNBETH" => 0.01, 
+#                       "BNBBTC" => 0.1, 
+#                       "ETHBTC" => 0.01, 
+#                       "BNBUSDT" => 0.001, 
+#                       "DOGEBTC" => 10.0, 
+#                       "EURUSDT" => 0.1, 
+#                       "ETHUSDT" => 0.0001, 
+#                       "ETHEUR" => 0.0001, 
+#                       "BTCUSDT" => 9.999999999999999e-6, 
+#                       "DOGEEUR" => 1.0, 
+#                       "DOGEUSDT" => 1.0)
+#arbitrage_iterative(buysell_matrix, assets, symbols, safe_quantities)
+#

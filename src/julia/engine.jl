@@ -1,12 +1,13 @@
 using Logging
+using Statistics
 
 include("core.jl")
 include("binance.jl")
 
-struct ExchangeSymbol
-    name::String
-    asset1::String
-    asset2::String
+mutable struct Timings
+    # Computation
+    c_main_loop::Float64
+    c_arbitrage::Float64
 end
 
 struct SymbolPrice
@@ -16,11 +17,23 @@ struct SymbolPrice
     timestamp::DateTime
 end
 
-struct Operation
-    order::Order
+struct Fill
+    price::Float64
     quantity::Float64
     commission::Float64
     commission_asset::String
+end
+
+struct Order
+    type::String
+    asset1::String
+    asset2::String
+    price::Float64
+end
+
+struct Operation
+    order::Order
+    fills::Vector{Fill}
 end
 
 struct Balance
@@ -31,8 +44,7 @@ struct Balance
 end
 
 struct ArbitrageOperation
-    expected_arbitrage::Arbitrage
-    real_arbitrage::Arbitrage
+    expected_arbitrage::ArbitrageIterative
     pre_balance::Vector{Balance}
     post_balance::Vector{Balance}
     operations::Vector{Operation}
@@ -43,50 +55,48 @@ struct ArbitrageEngine
     dict_task::Task
     price_channel::Channel
     symbol_dict::Dict{String, SymbolPrice}
+    safe_amounts::Dict{String, Float64}
+    filters::Dict{String, Any}
+    config::Dict{Any, Any}
 end
 
-function compute_prices(orderbook)
+function incremental_subtract(value::Float64, array::Vector{Float64})
+    remaining = value
+    subtract_array = Float64[]
+    for e in array
+        push!(subtract_array, max(0, e-remaining))
+        remaining = max(0,remaining-e)
+    end
+    subtract_array
+end
+
+function compute_prices(orderbook, quantity::Float64)
     asks = orderbook.asks
-    ask_price = mean_weighted(asks[:,1], asks[:,2])
+    asks_weights = incremental_subtract(quantity, asks[:,2]) - asks[:,2]
+    ask_price = mean_weighted(asks[:,1], asks_weights)
     bids = orderbook.bids
-    bid_price = mean_weighted(bids[:,1], bids[:,2])
+    bids_weights = incremental_subtract(quantity, bids[:,2]) - bids[:,2]
+    bid_price = mean_weighted(bids[:,1], bids_weights)
     return ask_price, bid_price
 end
 
-function get_symbols_by_assets(assets::Vector{String})
+function get_symbols(assets::Vector{String})
     @info "Getting symbols using the assets."
     symbols_matrix = bapi_symbols()
     valid_symbols = [ExchangeSymbol(x[1],x[2],x[3]) for x in symbols_matrix if x[2] in assets && x[3] in assets]
     return valid_symbols
 end
 
-function update_prices_channel_loop!(prices_channel::Channel, symbol::ExchangeSymbol)
-    @debug "Starting " * symbol.name * " prices loop."
-    while true
+function update_symbols_dict!(symbols_dict::Dict{String, SymbolPrice}, orderbook_channel::Channel, safe_quantities::Dict{String, Float64})
+    for item in orderbook_channel
         try
-            bapi_res = bapi_get_orderbook(symbol.name)
-
-            if bapi_res.status != 200
-                status = bapi_res.status
-                throw(BAPIResponseException(status, bapi_res))
-            end
-
-            ask, bid = compute_prices(bapi_res.response)
-            put!(prices_channel, SymbolPrice(symbol, ask, bid, bapi_res.timestamp))
-        catch err
-            @warn "Stoping " * symbol.name * " prices loop.", err
-            isa(err, InterruptException) || rethrow(err)
-            break
-        end
-    end
-end
-
-function update_symbols_dict!(symbols_dict::Dict{String, SymbolPrice}, prices_channel::Channel)
-    for sym_price in prices_channel
-        try
+            orderbook, timestamp = item
+            ask, bid = compute_prices(orderbook, safe_quantities[orderbook.symbol])
+            current_symbol = symbols_dict[uppercase(orderbook.symbol)]
+            sym_price = SymbolPrice(current_symbol.symbol, ask, bid, timestamp)
             symbols_dict[sym_price.symbol.name] = sym_price
         catch err
-            @warn "Stoping update symbol dict sub-task.", err
+            @warn "Stoping update symbol dict sub-task." err
             isa(err, InterruptException) || rethrow(err)
             break
         end
@@ -103,7 +113,7 @@ function stop_task(task::Task)
     schedule(task, InterruptException(), error=true)
 end
 
-function get_currency_matrix(engine::ArbitrageEngine, max_elapsed::Millisecond)
+function get_buysell_matrix(engine::ArbitrageEngine, max_elapsed::Millisecond)
     @debug "Getting currency matrix."
     valid_symbols_mask = [now() - x[2].timestamp for x in engine.symbol_dict] .< max_elapsed
     valid_symbols_keys = collect(keys(engine.symbol_dict))[valid_symbols_mask]
@@ -116,7 +126,7 @@ function get_currency_matrix(engine::ArbitrageEngine, max_elapsed::Millisecond)
     valid_assets = collect(String, valid_assets)
 
     n = length(valid_assets)
-    currency_matrix = ones(n,n)
+    buysell_matrix = zeros(n,n)
 
     for key in valid_symbols_keys
         ask = engine.symbol_dict[key].ask
@@ -125,41 +135,53 @@ function get_currency_matrix(engine::ArbitrageEngine, max_elapsed::Millisecond)
         asset2 = engine.symbol_dict[key].symbol.asset2
         asset1_pos = findfirst(isequal(asset1), valid_assets)
         asset2_pos = findfirst(isequal(asset2), valid_assets)
-        currency_matrix[asset1_pos, asset2_pos] = bid
-        currency_matrix[asset2_pos, asset1_pos] = 1/ask
+        buysell_matrix[asset1_pos, asset2_pos] = bid
+        buysell_matrix[asset2_pos, asset1_pos] = ask
     end
 
-    return currency_matrix, valid_assets
+    return buysell_matrix, valid_assets
 end
 
 function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation)
     @debug "Performing arbitrage analysis."
     # Check real balance and return comparison
-    expected = arbitrage_operation.expected_arbitrage
-    real = arbitrage_operation.real_arbitrage
-    # TODO
-end
+    post_balance_dict = Dict([(x.asset,x) for x in arbitrage_operation.post_balance])
 
-function make_arbitrage(arbitrage::Arbitrage, test::Bool = true)
-    # Perform the BAPI calls and return a real_arbitrage, operations when orders finish
-
-end
-
-function check_arbitrage!(arbitrage::Any)
-    # Check if anything strange in arbitrage
-    if isnothing(arbitrage)
-        return nothing
+    for pre_bal in arbitrage_operation.pre_balance
+        asset = pre_bal.asset
+        new_free = post_balance_dict[asset].free - pre_bal.free
+        new_locked = post_balance_dict[asset].locked - pre_bal.locked
+        new_aer = (new_free-pre_bal.free)/pre_bal.free
+        @info asset new_free new_locked new_aer
     end
+end
 
-    # if any of the operations values are 1
+function make_arbitrage(arbitrage::ArbitrageIterative, engine::ArbitrageEngine, test::Bool = true)
+    # Perform the BAPI calls and return operations when orders finish
+    recvWindow = engine.config["recvWindow"]
+    tasks = Task[]
     for order in arbitrage.orders
-        if order.price == 1
-            @debug "ARBITRAGE CHECK FAILED: Computed Arbitraged contains orders with price=1", arbitrage
-            return nothing
-        end
+        round_to = Integer(abs(floor(log10(parse(Float64, engine.filters[order.symbol]["LOT_SIZE"]["minQty"])))))
+        quantity = round(order.quantity, digits=round_to)
+        push!(tasks, @async bapi_post_order(order.symbol, order.type, quantity, recvWindow, test))
     end
 
-    return arbitrage
+    operations = Operation[]
+    for (i, t) in enumerate(tasks)
+        wait(t)
+        if test
+            continue
+        end
+        response, elapsed = t.result
+        fills = [Fill(parse(Float64, x["price"]), 
+                      parse(Float64, x["qty"]),
+                      parse(Float64, x["commission"]),
+                      x["commissionAsset"]) for x in response["fills"]]
+        op = Operation(arbitrage.orders[i], fills)
+        push!(operations, op)
+    end
+
+    return operations
 end
 
 function get_balances()
@@ -175,102 +197,148 @@ function get_balances()
     return balances
 end
 
-function start_engine(valid_assets::Vector{String})
-    @info "Starting engine. Assets: ", valid_assets
-    symbols_list = get_symbols_by_assets(valid_assets)
+function start_engine(config::Dict{Any, Any})
+    symbols_list = get_symbols(config["valid_symbols"])
+    filters = bapi_get_filters([x.name for x in symbols_list])
+    filters_dict = Dict([(x["symbol"],Dict([(f["filterType"],f) for f in x["filters"]])) for x in filters])
+
+    safe_amounts = Dict([(sym, parse(Float64, f["LOT_SIZE"]["minQty"])*config["MIN_NOTIONAL_MULTIPLIER"] ) for (sym, f) in filters_dict])
+
+    ##################
+
+    if length(symbols_list) <= 2
+        throw(ErrorException("Aborting engine start. Insufficient number of safe assets. Check logs."))
+    end
+
     symbols_dict = init_symbols_dict(symbols_list)
-    prices_channel = Channel()
+    @info "Starting engine. Assets: " safe_amounts
 
     @info "Starting prices sub-tasks."
-    loop_tasks = []
-    for sym in symbols_list
-        push!(loop_tasks, @async update_prices_channel_loop!(prices_channel, sym))
-    end
+    orderbook_channel = Channel{Tuple{BinanceAPIOrderBook, DateTime}}(length(symbols_list)*100)
+    loop_tasks = [@async bapi_ws_subscribe_streams(get_full_streams_url(symbols_list), orderbook_channel)]
+    
     @info "Starting update symbol dict sub-task."
-    dict_task = @async update_symbols_dict!(symbols_dict, prices_channel)
+    dict_task = @async update_symbols_dict!(symbols_dict, orderbook_channel, safe_amounts)
 
-    return ArbitrageEngine(loop_tasks, dict_task, prices_channel, symbols_dict)
+    return ArbitrageEngine(loop_tasks, dict_task, orderbook_channel, symbols_dict, safe_amounts, filters_dict, config)
 end
 
-function compute_fees(arbitrage::Arbitrage, order_fee::Float64)
-    type = arbitrage.type
-
-    if type=="DIRECT"
-        return order_fee*2
-    elseif type=="TRIANGULAR ROW"
-        return order_fee*3
-    elseif type=="TRIANGULAR COLUMN"
-        return order_fee*3
-    elseif type=="CUADRANGULAR"
-        return order_fee*4
-    else
-        throw(ErrorException("Arbitrage type unnkown: $type"))
-    end
-end
-
-function iteration_sleep()
-    time_to_sleep_in_seconds = 0.5 # seconds
-    sleep(time_to_sleep_in_seconds)
-end
-
-function engine_read_config()
+function engine_read_config(logging_file::String)
     @info "Reading engine configuration. HARDCODED"
-    logging_file = "engine.debug"
+    config = Dict()
+
     if logging_file != ""
-        @info "Starting to write logs in file: ", logging_file
+        @info "Starting to write logs in file: " logging_file
         io = open(logging_file, "w+")
         logger = SimpleLogger(io)
         global_logger(logger)
+    else
+        io = Channel()
     end
-    order_fee = 0.00075 # TODO check if this value match the calculated fees
-    security_profit = 0.001 # 0.1%
-    order_maxage = 500 # milliseconds
-    valid_assets = ["BTC","ETH","XRP","DOGE","ADA","BNB","EUR","USDT"]
-    return order_fee, security_profit, order_maxage, valid_assets, io
+
+    config["order_fee"] = 0.00075 # TODO check if this value match the calculated fees
+    config["security_profit"] = 0.001 # 0.1%
+    config["order_maxage"] = 100 # milliseconds
+    config["recvWindow"] = 1000 # milliseconds
+    config["io"] = io
+
+    config["MIN_NOTIONAL_MULTIPLIER"] = 1000
+    config["valid_symbols"] = ["EUR", "USDT", "BTC", "ETH", "BNB", "DOGE", "ADA", "XRP", "DOT", "BCH", "LTC", "LINK"]
+
+    return config
+end
+
+function iteration_sleep()
+    time_to_sleep_in_seconds = 0.05 # seconds
+    sleep(time_to_sleep_in_seconds)
+end
+
+function time_microsec()
+    time_ns()*1e-3
 end
 
 function main()
-    order_fee, security_profit, order_maxage, valid_assets, io = engine_read_config()
+    logging_file = ""#"engine.debug"
+    config = engine_read_config(logging_file)
     bapi_read_config()
-    engine = start_engine(valid_assets)
+
+    order_fee = config["order_fee"]
+    security_profit = config["security_profit"]
+    engine = start_engine(config)
 
     last_balance = get_balances()
+    timings = Timings(0.0,0.0)
     @info "Starting arbitrage:"
     try 
         while true
-            # the next two lines are 357.89 times faster here than in python
-            currency_matrix, assets = get_currency_matrix(engine, Millisecond(order_maxage))
-            if length(currency_matrix) > 2
-                detected_arbitrage = check_arbitrage!(arbitrage(currency_matrix, assets))
-                if isnothing(detected_arbitrage)
-                    @debug currency_matrix, assets
-                    iteration_sleep()
-                    continue
-                end
-                arbitrage_fees = compute_fees(detected_arbitrage, order_fee)
-                @debug "Arbitrage detected. ", detected_arbitrage, currency_matrix
-                iteration_sleep()
-                continue
-
-                if aer - arbitrage_fees >= security_profit
-                    #real_arbitrage, operations = make_arbitrage(detected_arbitrage)
-                    new_balance = get_balances()
-                    arbitrage_operation = ArbitrageOperation(detected_arbitrage, real_arbitrage, last_balance, new_balance, operations)
-                    analysis = analyse_arbitrage_operation(arbitrage_operation)
-                    last_balance = new_balance
-                    @debug analysis
-                else
-                    @info "aer - arbitrage_fees >= security_profit -> " * string(aer) * "-" * string(arbitrage_fees) * ">=" * string(security_profit)
-                    @debug detected_arbitrage
-                end
-            else
+            timings.c_main_loop = time_microsec()
+            buysell_matrix, assets = get_buysell_matrix(engine, Millisecond(config["order_maxage"]))
+            symbols = [x.symbol for x in collect(values(engine.symbol_dict)) if x.symbol.asset1 in assets && x.symbol.asset2 in assets]
+            if length(symbols) < 3
                 iteration_sleep()
                 continue
             end
+
+            detected_arbitrage = arbitrage_iterative(buysell_matrix, assets, symbols, engine.safe_amounts)
+            timings.c_arbitrage = time_microsec()
+
+            if isnothing(detected_arbitrage)
+                iteration_sleep()
+                continue
+            end
+
+            aer = detected_arbitrage.aer
+            arbitrage_fees = order_fee * 3
+
+            if aer - arbitrage_fees >= security_profit
+                @info string("Arbitrage detected. Expected AER=",round((aer - arbitrage_fees)*100, digits=2),"%") detected_arbitrage
+                
+                operations = make_arbitrage(detected_arbitrage, engine)
+                new_balance = get_balances()
+                arbitrage_operation = ArbitrageOperation(detected_arbitrage, last_balance, new_balance, operations)
+                analyse_arbitrage_operation(arbitrage_operation)
+                last_balance = new_balance
+                #break
+            else
+                @info "Arbitrage insecure." aer arbitrage_fees aer-arbitrage_fees security_profit aer - arbitrage_fees >= security_profit
+            end
+
+            compute_times(timings, engine)
+
+            iteration_sleep()
         end
     catch err
-        @warn "Error on main loop. Stoping.", err
-        close(io)
+        @warn "Error on main loop. Stoping." err
+        close(config["io"])
+        rethrow(err)
         return engine
     end
+end
+
+function compute_times(timings::Timings, engine::ArbitrageEngine)
+    n = time_microsec()
+
+    #price_loop deltas
+    prices_deltas = [Dates.value.(now()-x[2].timestamp) for x in engine.symbol_dict]
+
+    times_str = "Times: \n - Computation:\n"
+    times_str = times_str * string("\t\tMain Loop: ", round(n-timings.c_main_loop, digits=2), " μs\n")
+    times_str = times_str * string("\t\tArbitrage: ", round(timings.c_arbitrage-timings.c_main_loop, digits=2), " μs\n")
+
+    times_str = times_str * "\n - Network:\n"
+    times_str = times_str * string("\t\tPrices mean: ", round(mean(prices_deltas), digits=2), " ms\n")
+    times_str = times_str * string("\t\tPrices std: ", round(std(prices_deltas), digits=2), " ms\n")
+    times_str = times_str * string("\t\tPrices min: ", minimum(prices_deltas), " ms\n")
+    times_str = times_str * string("\t\tPrices max: ", maximum(prices_deltas), " ms\n")
+
+    @info times_str
+end
+
+
+function get_full_streams_url(symbols_list::Vector{ExchangeSymbol})
+    full_string = "wss://stream.binance.com:9443/stream?streams="
+    for s in symbols_list
+        full_string = full_string * lowercase(s.name) * "@depth10@100ms/"
+    end
+    return String(chop(full_string)) #remove last char from string
 end
