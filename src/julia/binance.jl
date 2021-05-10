@@ -67,6 +67,7 @@ function bapi_get(url::String, headers::Vector{Any}=[])
     time_e = now()
     elapsed = time_e - time_i
     timestamp = time_e - div(elapsed,2)
+    @info "GET $url"
     return request, timestamp, elapsed
 end
 
@@ -76,6 +77,7 @@ function bapi_post(url::String, headers::Vector{Any}=[])
     time_e = now()
     elapsed = time_e - time_i
     timestamp = time_e - div(elapsed,2)
+    @info "POST $url"
     return request, timestamp, elapsed
 end
 
@@ -96,7 +98,7 @@ function bapi_get_price(symbol::String)
     return BinanceAPIResponse(url, request.status, parsed_json, timestamp, elapsed, parse(Int32, headers["x-mbx-used-weight"]))
 end
 
-function bapi_get_orderbook(symbol::String, depth::Integer = 5)
+function bapi_get_orderbook(symbol::String, depth::Integer = 20)
     uri = "depth?symbol=$symbol&limit=$depth"
     url = bapi_endpoint() * uri
     request, timestamp, elapsed = bapi_get(url)
@@ -111,6 +113,21 @@ function bapi_get_exchangeinfo()
     url = bapi_endpoint() * uri
     request, time = bapi_get(url)
     return JSON3.read(request.body)
+end
+
+function bapi_get_filters(symbols::Vector{String})
+    exchange_info = bapi_get_exchangeinfo()
+
+    filters = []
+    for sym in exchange_info["symbols"]
+        if !(sym["symbol"] in symbols)
+            continue
+        end
+        push!(filters, Dict("symbol"=>sym["symbol"], "asset1"=> sym["baseAsset"], 
+                            "asset2"=> sym["quoteAsset"], "filters"=>sym["filters"]) )
+    end
+
+    return filters
 end
 
 function bapi_symbols()
@@ -199,14 +216,13 @@ function bapi_ws_subscribe_streams(url::String, channel::Channel)
     end
 end
 
-function bapi_post_order(symbol::String, side::String, quantity::Float64, test::Bool=true)
+function bapi_post_order(symbol::String, side::String, quantity::Float64, recvWindow::Integer=50, test::Bool=true)
     if test
         uri = "order/test"
     else
         uri = "order/test"
     end
     type = "MARKET"
-    recvWindow = 1000 # milliseconds
     quantity_str = @sprintf("%.8f",quantity)
 
     timestamp = bapi_client_clock()
