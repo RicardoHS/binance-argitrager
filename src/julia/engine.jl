@@ -162,8 +162,8 @@ function make_arbitrage(arbitrage::ArbitrageIterative, engine::ArbitrageEngine, 
     recvWindow = engine.config["RECVWINDOW"]
     tasks = Task[]
     for order in arbitrage.orders
-        min_qty = engine.filters[order.symbol]["LOT_SIZE"]["minQty"]
-        round_to = Integer(abs(floor(log10(parse(Float64, min_qty)))))
+        min_qty = parse(Float64, engine.filters[order.symbol]["LOT_SIZE"]["minQty"])
+        round_to = Integer(abs(floor(log10(min_qty))))
         quantity = max(min_qty, round(order.quantity, digits=round_to))
         push!(tasks, @async bapi_post_order(order.symbol, order.type, quantity, recvWindow, test))
     end
