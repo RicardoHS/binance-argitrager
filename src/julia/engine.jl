@@ -25,15 +25,8 @@ struct Fill
     commission_asset::String
 end
 
-struct Order
-    type::String
-    asset1::String
-    asset2::String
-    price::Float64
-end
-
 struct Operation
-    order::Order
+    order::OrderSymbol
     fills::Vector{Fill}
 end
 
@@ -155,6 +148,11 @@ function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation)
         new_aer = new_free/pre_bal.free
         @info asset new_free new_locked new_aer
     end
+
+    for op in arbitrage_operation.operations
+        @info op
+    end
+
 end
 
 function make_arbitrage(arbitrage::ArbitrageIterative, engine::ArbitrageEngine, test::Bool = true)
