@@ -49,8 +49,10 @@ struct ArbitrageEngine
     dict_task::Task
     price_channel::Channel
     symbol_dict::Dict{String, SymbolPrice}
+    symbols::Vector{ExchangeSymbol}
     safe_amounts::Dict{String, Float64}
     filters::Dict{String, Any}
+    prices_to_base::Dict{String, Float64}
     config::Dict{Any, Any}
 end
 
@@ -136,18 +138,22 @@ function get_buysell_matrix(engine::ArbitrageEngine, max_elapsed::Millisecond)
     return buysell_matrix, valid_assets
 end
 
-function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation)
+function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation, engine::ArbitrageEngine)
     @debug "Performing arbitrage analysis."
     # Check real balance and return comparison
-    post_balance_dict = Dict([(x.asset,x) for x in arbitrage_operation.post_balance])
+    post_balance_dict = Dict([(x.asset,x) for x in arbitrage_operation.post_balance if x.asset in engine.config["ASSETS"]])
+    pre_balance = [x for x in arbitrage_operation.pre_balance if x.asset in engine.config["ASSETS"]]
 
-    for pre_bal in arbitrage_operation.pre_balance
+    total_balance = 0
+    base_asset = engine.config["BASE_CURRENCY_ASSET"]
+    for pre_bal in pre_balance
         asset = pre_bal.asset
-        new_free = post_balance_dict[asset].free - pre_bal.free
-        new_locked = post_balance_dict[asset].locked - pre_bal.locked
-        new_aer = new_free/pre_bal.free
-        @info asset new_free new_locked new_aer
+        diff_free_balance = round(post_balance_dict[asset].free - pre_bal.free, digits=8)
+        total_balance += engine.prices_to_base[asset] * diff_free_balance
+        @info asset diff_free_balance
     end
+
+    @info "Total Balance in base currency: $(round(total_balance, digits=8)) $base_asset"
 
     for op in arbitrage_operation.operations
         @info op
@@ -197,13 +203,43 @@ function get_balances()
     return balances
 end
 
-function get_safe_amounts(filters_dict, symbols::Vector{ExchangeSymbol}, min_notional_multiplier::Float64, base_currency_asset::String)::Dict{String, Float64}
-    max_safe_amounts = Dict()
+function get_prices(symbols::Vector{ExchangeSymbol})
     prices = Dict()
     for s in symbols
         res = bapi_get_price(s.name)
         price = parse(Float64, res.response["price"])
         prices[s.name] = price
+    end
+    return prices
+end
+
+function get_base_asset_pair_prices(symbols::Vector{ExchangeSymbol}, base_currency_asset::String)::Dict{String,Float64}
+    prices_to_base_asset = Dict{String,Float64}()
+    prices_to_base_asset[base_currency_asset] = 1.0
+
+    symbols_as_base = [s for s in symbols if s.asset1 == base_currency_asset]
+    symbols_as_quoted = [s for s in symbols if s.asset2 == base_currency_asset]
+
+    for s in symbols_as_quoted
+        res = bapi_get_price(s.name)
+        price = parse(Float64, res.response["price"])
+        prices_to_base_asset[s.asset1] = price
+    end
+
+    for s in symbols_as_base
+        res = bapi_get_price(s.name)
+        price = parse(Float64, res.response["price"])
+        prices_to_base_asset[s.asset2] = 1/price
+    end
+
+    return prices_to_base_asset
+end
+
+function get_safe_amounts(filters_dict, symbols::Vector{ExchangeSymbol}, min_notional_multiplier::Float64, base_currency_asset::String)::Dict{String, Float64}
+    max_safe_amounts = Dict()
+    prices = get_prices(symbols)
+    for s in symbols
+        price = prices[s.name]
 
         f = filters_dict[s.name]
         lot_stepsize = parse(Float64, f["LOT_SIZE"]["stepSize"])
@@ -239,9 +275,10 @@ end
 
 function start_engine(config::Dict{Any, Any})
     base_currency_asset = config["BASE_CURRENCY_ASSET"]
-    symbols_list = get_symbols(config["SYMBOLS"])
+    symbols_list = get_symbols(config["ASSETS"])
     filters_dict = get_filters(symbols_list)
     safe_amounts = get_safe_amounts(filters_dict, symbols_list, config["MIN_NOTIONAL_MULTIPLIER"], base_currency_asset)
+    prices_to_base_asset = get_base_asset_pair_prices(symbols_list, base_currency_asset)
 
     ##################
 
@@ -261,7 +298,7 @@ function start_engine(config::Dict{Any, Any})
     @info "Starting update symbol dict sub-task."
     dict_task = @async update_symbols_dict!(symbols_dict, orderbook_channel, safe_amounts)
 
-    return ArbitrageEngine(loop_tasks, dict_task, orderbook_channel, symbols_dict, safe_amounts, filters_dict, config), last_balance
+    return ArbitrageEngine(loop_tasks, dict_task, orderbook_channel, symbols_dict, symbols_list, safe_amounts, filters_dict, prices_to_base_asset, config), last_balance
 end
 
 function engine_read_config(logging_file::String)
@@ -288,7 +325,7 @@ function engine_read_config(logging_file::String)
 
     config["MIN_NOTIONAL_MULTIPLIER"] = parse(Float64, retrieve(conf, "engine", "MIN_NOTIONAL_MULTIPLIER"))
     config["BASE_CURRENCY_ASSET"] = retrieve(conf, "engine", "BASE_CURRENCY_ASSET")
-    config["SYMBOLS"] = retrieve(conf, "engine", "SYMBOLS")
+    config["ASSETS"] = retrieve(conf, "engine", "ASSETS")
 
     return config
 end
@@ -332,7 +369,7 @@ function main(test::Bool=true)
                         operations = make_arbitrage(detected_arbitrage, engine, test)
                         new_balance = get_balances()
                         arbitrage_operation = ArbitrageOperation(detected_arbitrage, last_balance, new_balance, operations)
-                        analyse_arbitrage_operation(arbitrage_operation)
+                        analyse_arbitrage_operation(arbitrage_operation, engine)
                         last_balance = new_balance
                         break
                     else
