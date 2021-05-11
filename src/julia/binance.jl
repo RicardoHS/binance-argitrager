@@ -35,6 +35,15 @@ struct BAPIResponseException <: Exception
     response::BinanceAPIResponse
 end
 
+function bapi_ping()
+    uri = "ping"
+    url = bapi_endpoint() * uri
+    request, timestamp, elapsed = bapi_get(url)
+    parsed_json = JSON3.read(request.body)
+    headers = Dict(request.headers)
+    return BinanceAPIResponse(url, request.status, parsed_json, timestamp, elapsed, parse(Int32, headers["x-mbx-used-weight"]))
+end
+
 function bapi_read_config()
     config_file_path = pwd() * "/src/julia/" * "./config.ini"
     @info "Reading Binance API configuration: " config_file_path
