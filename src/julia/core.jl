@@ -55,7 +55,7 @@ function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, sym
                         initial_quantity = initial_quantities[symbols[i1].name]
                         push!(orders, OrderSymbol("BUY", symbols[i1].name, prices[1], initial_quantity))
                         push!(orders, OrderSymbol("BUY", symbols[i2].name, prices[2], (1/prices[2]) * initial_quantity ))
-                        push!(orders, OrderSymbol("SELL", symbols[i3].name, prices[3], prices[3] * (1/prices[2]) * initial_quantity ))
+                        push!(orders, OrderSymbol("SELL", symbols[i3].name, prices[3], (1/prices[2]) * initial_quantity ))
                         aer = 1 / prices[1] * 1 / prices[2] * prices[3] -1
                         push!(arbitrages, ArbitrageIterative("BBS", orders, aer))
 
