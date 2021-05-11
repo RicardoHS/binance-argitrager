@@ -129,4 +129,6 @@ dmypy.json
 .pyre/
 
 #config files
-config.txt
+config*.txt
+config.ini
+engine.debug

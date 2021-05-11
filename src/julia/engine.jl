@@ -199,21 +199,62 @@ function get_balances()
     return balances
 end
 
-function start_engine(config::Dict{Any, Any})
-    symbols_list = get_symbols(config["SYMBOLS"])
-    filters = bapi_get_filters([x.name for x in symbols_list])
-    filters_dict = Dict([(x["symbol"],Dict([(f["filterType"],f) for f in x["filters"]])) for x in filters])
+function get_safe_amounts(filters_dict, symbols::Vector{ExchangeSymbol}, min_notional_multiplier::Float64, base_currency_asset::String)::Dict{String, Float64}
+    max_safe_amounts = Dict()
+    prices = Dict()
+    for s in symbols
+        res = bapi_get_price(s.name)
+        price = parse(Float64, res.response["price"])
+        prices[s.name] = price
 
-    safe_amounts = Dict([(sym, parse(Float64, f["LOT_SIZE"]["minQty"])*config["MIN_NOTIONAL_MULTIPLIER"] ) for (sym, f) in filters_dict])
+        f = filters_dict[s.name]
+        lot_stepsize = parse(Float64, f["LOT_SIZE"]["stepSize"])
+        min_notional = parse(Float64, f["MIN_NOTIONAL"]["minNotional"])
+        min_qty = min_notional / price
+        min_qty_rounded = ceil(min_qty, digits=Integer(abs(floor(log10(lot_stepsize)))))
+
+        if s.asset1 in keys(max_safe_amounts)
+            max_safe_amounts[s.asset1] = max(min_qty_rounded, max_safe_amounts[s.asset1])
+        else
+            max_safe_amounts[s.asset1] = min_qty_rounded
+        end
+    end
+
+    safe_amounts = Dict{String, Float64}()
+    for s in symbols
+        final_safe_amount = max_safe_amounts[s.asset1]*min_notional_multiplier
+        safe_amounts[s.name] = final_safe_amount
+
+        if s.asset1 != base_currency_asset
+            @info "Safe amount for symbol $(s.name) => $final_safe_amount ($(round(final_safe_amount*prices[s.asset1*base_currency_asset], digits=2)) $base_currency_asset)"
+        end
+    end
+
+    return safe_amounts
+end
+
+function get_filters(symbols::Vector{ExchangeSymbol})
+    filters = bapi_get_filters([x.name for x in symbols])
+    filters_dict = Dict([(x["symbol"],Dict([(f["filterType"],f) for f in x["filters"]])) for x in filters])
+    return filters_dict
+end
+
+function start_engine(config::Dict{Any, Any})
+    base_currency_asset = config["BASE_CURRENCY_ASSET"]
+    symbols_list = get_symbols(config["SYMBOLS"])
+    filters_dict = get_filters(symbols_list)
+    safe_amounts = get_safe_amounts(filters_dict, symbols_list, config["MIN_NOTIONAL_MULTIPLIER"], base_currency_asset)
 
     ##################
+
+    last_balance = get_balances()
 
     if length(symbols_list) <= 2
         throw(ErrorException("Aborting engine start. Insufficient number of safe assets. Check logs."))
     end
 
     symbols_dict = init_symbols_dict(symbols_list)
-    @info "Starting engine. Assets: " safe_amounts
+    @info "Starting engine."
 
     @info "Starting prices sub-tasks."
     orderbook_channel = Channel{Tuple{BinanceAPIOrderBook, DateTime}}(length(symbols_list)*100)
@@ -222,7 +263,7 @@ function start_engine(config::Dict{Any, Any})
     @info "Starting update symbol dict sub-task."
     dict_task = @async update_symbols_dict!(symbols_dict, orderbook_channel, safe_amounts)
 
-    return ArbitrageEngine(loop_tasks, dict_task, orderbook_channel, symbols_dict, safe_amounts, filters_dict, config)
+    return ArbitrageEngine(loop_tasks, dict_task, orderbook_channel, symbols_dict, safe_amounts, filters_dict, config), last_balance
 end
 
 function engine_read_config(logging_file::String)
@@ -247,7 +288,8 @@ function engine_read_config(logging_file::String)
     config["RECVWINDOW"] = parse(Int64, retrieve(conf, "engine", "RECVWINDOW")) # milliseconds
     config["io"] = io
 
-    config["MIN_NOTIONAL_MULTIPLIER"] = parse(Int64, retrieve(conf, "engine", "MIN_NOTIONAL_MULTIPLIER"))
+    config["MIN_NOTIONAL_MULTIPLIER"] = parse(Float64, retrieve(conf, "engine", "MIN_NOTIONAL_MULTIPLIER"))
+    config["BASE_CURRENCY_ASSET"] = retrieve(conf, "engine", "BASE_CURRENCY_ASSET")
     config["SYMBOLS"] = retrieve(conf, "engine", "SYMBOLS")
 
     return config
@@ -263,15 +305,14 @@ function time_microsec()
 end
 
 function main(test::Bool=true)
-    logging_file = ""#"engine.debug"
+    logging_file = "" # "engine.debug"
     config = engine_read_config(logging_file)
     bapi_read_config()
 
     order_fee = config["ORDER_FEE"]
     security_profit = config["SECURITY_PROFIT"]
-    engine = start_engine(config)
+    engine, last_balance= start_engine(config)
 
-    last_balance = get_balances()
     timings = Timings(0.0,0.0)
     @info "Starting arbitrage:"
     try 
@@ -279,37 +320,29 @@ function main(test::Bool=true)
             timings.c_main_loop = time_microsec()
             buysell_matrix, assets = get_buysell_matrix(engine, Millisecond(config["ORDER_MAXAGE"]))
             symbols = [x.symbol for x in collect(values(engine.symbol_dict)) if x.symbol.asset1 in assets && x.symbol.asset2 in assets]
-            if length(symbols) < 3
-                iteration_sleep()
-                continue
+            if length(symbols) >= 3
+                detected_arbitrage = arbitrage_iterative(buysell_matrix, assets, symbols, engine.safe_amounts)
+                timings.c_arbitrage = time_microsec()
+
+                if !isnothing(detected_arbitrage)
+                    aer = detected_arbitrage.aer
+                    arbitrage_fees = order_fee * 3
+
+                    if aer - arbitrage_fees >= security_profit
+                        @info string("Arbitrage detected. Expected AER=",round((aer - arbitrage_fees)*100, digits=2),"%") detected_arbitrage
+                        
+                        operations = make_arbitrage(detected_arbitrage, engine, test)
+                        new_balance = get_balances()
+                        arbitrage_operation = ArbitrageOperation(detected_arbitrage, last_balance, new_balance, operations)
+                        analyse_arbitrage_operation(arbitrage_operation)
+                        last_balance = new_balance
+                        break
+                    else
+                        @info "Arbitrage insecure." aer arbitrage_fees aer-arbitrage_fees security_profit aer - arbitrage_fees >= security_profit
+                    end
+                end                
             end
-
-            detected_arbitrage = arbitrage_iterative(buysell_matrix, assets, symbols, engine.safe_amounts)
-            timings.c_arbitrage = time_microsec()
-
-            if isnothing(detected_arbitrage)
-                iteration_sleep()
-                continue
-            end
-
-            aer = detected_arbitrage.aer
-            arbitrage_fees = order_fee * 3
-
-            if aer - arbitrage_fees >= security_profit
-                @info string("Arbitrage detected. Expected AER=",round((aer - arbitrage_fees)*100, digits=2),"%") detected_arbitrage
-                
-                operations = make_arbitrage(detected_arbitrage, engine, test)
-                new_balance = get_balances()
-                arbitrage_operation = ArbitrageOperation(detected_arbitrage, last_balance, new_balance, operations)
-                analyse_arbitrage_operation(arbitrage_operation)
-                last_balance = new_balance
-                break
-            else
-                @info "Arbitrage insecure." aer arbitrage_fees aer-arbitrage_fees security_profit aer - arbitrage_fees >= security_profit
-            end
-
             compute_times(timings, engine)
-
             iteration_sleep()
         end
     catch err
