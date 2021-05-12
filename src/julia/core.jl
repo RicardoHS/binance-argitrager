@@ -2,23 +2,60 @@ struct ExchangeSymbol
     name::String
     asset1::String
     asset2::String
+    filters::Dict{String, Any}
 end
+Base.show(io::IO, obj::ExchangeSymbol) = print(io, "ExchangeSymbol($(obj.name), $(obj.asset1), $(obj.asset2), <$(length(obj.filters)) filters>)")
 
-struct OrderSymbol
+struct Order
     type::String
-    symbol::String
+    symbol::ExchangeSymbol
     price::Float64
     quantity::Float64
 end
 
 struct ArbitrageIterative
     type::String
-    orders::Vector{OrderSymbol}
+    orders::Vector{Order}
     aer::Float64
+    aer2::Float64
+    aer3::Float64
 end
 
 function mean_weighted(a::Vector{Float64}, weights::Vector{Float64})
     return sum(a .* weights) / sum(weights)
+end
+
+function incremental_subtract(value::Float64, array::Vector{Float64})
+    remaining = value
+    subtract_array = Float64[]
+    for e in array
+        push!(subtract_array, max(0, e-remaining))
+        remaining = max(0,remaining-e)
+    end
+    subtract_array
+end
+
+function get_safe_minqty(price::Float64, s::ExchangeSymbol)
+    f = s.filters
+    lot_stepsize = parse(Float64, f["LOT_SIZE"]["stepSize"])
+    min_notional = parse(Float64, f["MIN_NOTIONAL"]["minNotional"])
+    min_qty = min_notional / price
+    min_qty_rounded = ceil(min_qty, digits=Integer(abs(floor(log10(lot_stepsize)))))
+    return min_qty_rounded
+end
+
+function get_safe_qty(qty::Float64, s::ExchangeSymbol)
+    min_qty = parse(Float64, s.filters["LOT_SIZE"]["minQty"])
+    round_to = Integer(abs(floor(log10(min_qty))))
+    safe_qty = max(min_qty, round(qty, digits=round_to))
+    return safe_qty
+end
+
+function get_safe_price(price::Float64, s::ExchangeSymbol)
+    min_price = parse(Float64, s.filters["PRICE_FILTER"]["minPrice"])
+    round_to = Integer(abs(floor(log10(min_price))))
+    safe_price = max(min_price, round(price, digits=round_to))
+    return safe_price
 end
 
 function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, symbols::Vector{ExchangeSymbol}, initial_quantities::Dict{String, Float64})
@@ -33,31 +70,27 @@ function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, sym
                 b1 = v2[i1]
                 a2 = v1[i2]
                 for i3 in 1:length(v1)
-                    #if v1[i3]==b1 && v2[i3]==a2
-                    #    orders = OrderSymbol[]
-                    #    prices = [buysell_matrix[a1,b1], buysell_matrix[a2,b2], buysell_matrix[b1,a2]]
-                    #    if prod(prices) == 0
-                    #        continue
-                    #    end
-                    #    initial_quantity = initial_quantities[symbols[i1].name]
-                    #    push!(orders, OrderSymbol("BUY", symbols[i1].name, prices[1], initial_quantity))
-                    #    push!(orders, OrderSymbol("SELL", symbols[i2].name, prices[2], initial_quantity / prices[1]))
-                    #    push!(orders, OrderSymbol("BUY", symbols[i3].name, prices[3], initial_quantity / prices[1] * prices[2]))
-                    #    aer = 1 / prices[1] * prices[2] * 1 /  prices[3] -1
-                    #    push!(arbitrages, ArbitrageIterative("BSB", orders, aer))
-
+                    # Other types of arbitrages may exists. eg: BSB, BBB (or the inverse: SBS, SSS, SSB) 
                     if v1[i3]==a2 && v2[i3]==b1
-                        orders = OrderSymbol[]
+                        orders = Order[]
                         prices = [buysell_matrix[a1,b1], buysell_matrix[a2,b2], buysell_matrix[b1,a2]]
                         if prod(prices) == 0
                             continue
                         end
                         initial_quantity = initial_quantities[symbols[i1].name]
-                        push!(orders, OrderSymbol("BUY", symbols[i1].name, prices[1], initial_quantity))
-                        push!(orders, OrderSymbol("BUY", symbols[i2].name, prices[2], (1/prices[2]) * initial_quantity ))
-                        push!(orders, OrderSymbol("SELL", symbols[i3].name, prices[3], (1/prices[2]) * initial_quantity ))
+                        a1_qty = initial_quantity
+                        push!(orders, Order("BUY", symbols[i1], prices[1], a1_qty))
+                        a2_qty = get_safe_qty((1/prices[2]) * initial_quantity, symbols[i2])
+                        push!(orders, Order("BUY", symbols[i2], prices[2], a2_qty))
+                        a3_qty = a2_qty
+                        push!(orders, Order("SELL", symbols[i3], prices[3], a3_qty))
                         aer = 1 / prices[1] * 1 / prices[2] * prices[3] -1
-                        push!(arbitrages, ArbitrageIterative("BBS", orders, aer))
+
+                        slipeage_qty = prices[1] * (prices[2]*a2_qty)
+                        aer2 = (prices[3]*a3_qty-slipeage_qty)/slipeage_qty
+                        slipeage_safe_qty = get_safe_qty(slipeage_qty, symbols[i1])
+                        aer3 = (prices[3]*a3_qty-slipeage_safe_qty)/slipeage_safe_qty
+                        push!(arbitrages, ArbitrageIterative("BBS", orders, aer2, aer, aer3))
 
                     end
                 end
