@@ -7,7 +7,7 @@ mutable struct Timings
 end
 
 function iteration_sleep()
-    time_to_sleep_in_seconds = 0.05 # seconds
+    time_to_sleep_in_seconds = 0.0008 # seconds
     sleep(time_to_sleep_in_seconds)
 end
 
