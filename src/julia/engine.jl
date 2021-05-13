@@ -256,7 +256,7 @@ function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation, en
     total_commission = 0
     total_fees = 0
     for op in arbitrage_operation.operations
-        for fill in of.fills
+        for fill in op.fills
             total_fees += fill.commission * engine.prices_to_main_asset[fill.commission_asset]
         end
         @info op
