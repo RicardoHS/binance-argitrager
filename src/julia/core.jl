@@ -90,14 +90,19 @@ function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, sym
                         push!(orders, Order("BUY", symbols[i1].symbol, prices[1], a1_qty))
                         a2_qty = get_safe_qty((1/prices[2]) * a1_qty, symbols[i2].symbol)
                         push!(orders, Order("BUY", symbols[i2].symbol, prices[2], a2_qty))
-                        a3_qty = a2_qty
+                        a3_qty = get_safe_qty(a2_qty, symbols[i2].symbol)
                         push!(orders, Order("SELL", symbols[i3].symbol, prices[3], a3_qty))
 
                         if a1_qty <= quantities[symbols[i1].symbol.name][1] && 
                             a2_qty <= quantities[symbols[i2].symbol.name][1] && 
                             a3_qty <= quantities[symbols[i3].symbol.name][2]
                             # If a2_qty is less than the detected qty and also a3_qty is less too 
-                            aer = 1 / prices[1] * 1 / prices[2] * prices[3] -1
+                            # aer = 1 / prices[1] * 1 / prices[2] * prices[3] - 1
+
+                            x = prices[1] * a1_qty
+                            z = prices[2] * a2_qty
+                            y = prices[3] * a3_qty
+                            aer = ( y - abs((a1_qty-z)*prices[1]) - x ) / x
                         else
                             aer = 0
                         end
