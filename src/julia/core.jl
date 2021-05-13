@@ -88,7 +88,7 @@ function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, sym
                         end
                         a1_qty = safe_amounts[symbols[i1].symbol.name]
                         push!(orders, Order("BUY", symbols[i1].symbol, prices[1], a1_qty))
-                        a2_qty = get_safe_qty((1/prices[2]) * initial_quantity, symbols[i2].symbol)
+                        a2_qty = get_safe_qty((1/prices[2]) * a1_qty, symbols[i2].symbol)
                         push!(orders, Order("BUY", symbols[i2].symbol, prices[2], a2_qty))
                         a3_qty = a2_qty
                         push!(orders, Order("SELL", symbols[i3].symbol, prices[3], a3_qty))
