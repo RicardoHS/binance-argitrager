@@ -67,7 +67,7 @@ function get_safe_price(price::Float64, s::ExchangeSymbol)
     return safe_price
 end
 
-function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, symbols::Vector{SymbolPrice}, quantities::Dict{String, Vector{Float64}})
+function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, symbols::Vector{SymbolPrice}, quantities::Dict{String, Vector{Float64}}, safe_amounts::Dict{String, Float64})
     assets_dict = Dict([(a,i) for (i, a) in enumerate(assets)])
     v1 = [assets_dict[s.symbol.asset1] for s in symbols]
     v2 = [assets_dict[s.symbol.asset2] for s in symbols]
@@ -86,15 +86,16 @@ function arbitrage_iterative(buysell_matrix::Matrix, assets::Vector{String}, sym
                         if prod(prices) == 0
                             continue
                         end
-                        initial_quantity = quantities[symbols[i1].symbol.name][1]
-                        a1_qty = initial_quantity
+                        a1_qty = safe_amounts[symbols[i1].symbol.name]
                         push!(orders, Order("BUY", symbols[i1].symbol, prices[1], a1_qty))
                         a2_qty = get_safe_qty((1/prices[2]) * initial_quantity, symbols[i2].symbol)
                         push!(orders, Order("BUY", symbols[i2].symbol, prices[2], a2_qty))
                         a3_qty = a2_qty
                         push!(orders, Order("SELL", symbols[i3].symbol, prices[3], a3_qty))
 
-                        if a2_qty <= quantities[symbols[i2].symbol.name][1] && a3_qty <= quantities[symbols[i3].symbol.name][2]
+                        if a1_qty <= quantities[symbols[i1].symbol.name][1] && 
+                            a2_qty <= quantities[symbols[i2].symbol.name][1] && 
+                            a3_qty <= quantities[symbols[i3].symbol.name][2]
                             # If a2_qty is less than the detected qty and also a3_qty is less too 
                             aer = 1 / prices[1] * 1 / prices[2] * prices[3] -1
                         else

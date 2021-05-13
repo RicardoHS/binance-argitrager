@@ -37,6 +37,7 @@ struct ArbitrageEngine
     dict_task::Task
     price_channel::Channel
     symbol_dict::Dict{String, SymbolPrice}
+    safe_amounts::Dict{String, Float64}
     symbols::Vector{ExchangeSymbol}
     prices_to_main_asset::Dict{String, Float64}
     config::Dict{Any, Any}
@@ -202,6 +203,33 @@ function get_main_asset_pair_prices(symbols::Vector{ExchangeSymbol}, main_asset:
     return prices_to_main_asset
 end
 
+function get_safe_amounts(symbols::Vector{ExchangeSymbol}, min_notional_multiplier::Float64, main_asset::String)::Dict{String, Float64}
+    max_safe_amounts = Dict()
+    prices = get_prices(symbols)
+    for s in symbols
+        price = prices[s.name]
+        min_qty = get_safe_minqty(price, s)
+
+        if s.asset1 in keys(max_safe_amounts)
+            max_safe_amounts[s.asset1] = max(min_qty, max_safe_amounts[s.asset1])
+        else
+            max_safe_amounts[s.asset1] = min_qty
+        end
+    end
+
+    safe_amounts = Dict{String, Float64}()
+    for s in symbols
+        final_safe_amount = max_safe_amounts[s.asset1]*min_notional_multiplier
+        safe_amounts[s.name] = get_safe_qty(final_safe_amount, s)
+
+        if s.asset1 != main_asset
+            @info "Safe amount for symbol $(s.name) => $(round(final_safe_amount, digits=8)) ($(round(final_safe_amount*prices[s.asset1*main_asset], digits=2)) $main_asset)"
+        end
+    end
+
+    return safe_amounts
+end
+
 function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation, engine::ArbitrageEngine)
     @debug "Performing arbitrage analysis."
     # Check real balance and return comparison
@@ -259,8 +287,7 @@ end
 function start_engine(config::Dict{Any, Any})
     main_asset = config["MAIN_ASSET"]
     symbols_list = get_symbols(config["ASSETS"])
-
-    # TODO: Modify whole app to use only the best ticker data (not the orderbook).
+    safe_amounts = get_safe_amounts(symbols_list, config["MIN_NOTIONAL_MULTIPLIER"], main_asset)
     prices_to_main_asset = get_main_asset_pair_prices(symbols_list, main_asset)
 
     ##################
@@ -281,5 +308,5 @@ function start_engine(config::Dict{Any, Any})
     @info "Starting update symbol dict sub-task."
     dict_task = @async update_symbols_dict!(symbols_dict, ticker_channel)
 
-    return ArbitrageEngine(loop_tasks, dict_task, ticker_channel, symbols_dict, symbols_list, prices_to_main_asset, config), last_balance
+    return ArbitrageEngine(loop_tasks, dict_task, ticker_channel, symbols_dict, safe_amounts, symbols_list, prices_to_main_asset, config), last_balance
 end

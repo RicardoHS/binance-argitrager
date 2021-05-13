@@ -56,7 +56,7 @@ function main(test::Bool=true)
             buysell_matrix, assets, quantities = get_buysell_matrix(symbol_dict, order_maxage)
             symbols = [x for x in collect(values(symbol_dict)) if x.symbol.asset1 in assets && x.symbol.asset2 in assets]
             if length(symbols) >= 3
-                detected_arbitrage = arbitrage_iterative(buysell_matrix, assets, symbols, quantities)
+                detected_arbitrage = arbitrage_iterative(buysell_matrix, assets, symbols, quantities, engine.safe_amounts)
                 timings.c_arbitrage = time_microsec()
 
                 if !isnothing(detected_arbitrage)
