@@ -21,6 +21,12 @@ struct BinanceAPIOrderBook
     asks::Matrix{Float64}
 end
 
+struct BinanceAPITicker
+    symbol::String
+    bid::Vector{Float64}
+    ask::Vector{Float64}
+end
+
 struct BinanceAPIResponse
     url::String
     status::Integer
@@ -38,7 +44,7 @@ end
 function bapi_ping()
     uri = "ping"
     url = bapi_endpoint() * uri
-    request, timestamp, elapsed = bapi_get(url)
+    request, timestamp, elapsed = bapi_get(url, verbose=false)
     parsed_json = JSON3.read(request.body)
     headers = Dict(request.headers)
     return BinanceAPIResponse(url, request.status, parsed_json, timestamp, elapsed, parse(Int32, headers["x-mbx-used-weight"]))
@@ -54,7 +60,11 @@ function bapi_read_config()
     config_dict["PUBLIC_KEY"] = retrieve(conf, "bapi", "PUBLIC_KEY")
     config_dict["SECRET_KEY"] = retrieve(conf, "bapi", "SECRET_KEY")
 
+    config_dict["endpoint"] = "api"
+
     global api_config = config_dict
+
+    bapi_test_all_endpoints()
 end
 
 function bapi_client_clock()
@@ -64,30 +74,71 @@ function bapi_client_clock()
     return round(Int64, time()*1000)
 end
 
+function bapi_test_endpoint(endpoint::String, tries::Int=10)
+    last_endpoint = api_config["endpoint"]
+    api_config["endpoint"] = endpoint
+
+    calls = Task[]
+    for i in 1:tries
+        push!(calls, @async bapi_ping())
+    end
+
+    times = 0
+    for c in calls
+        wait(c)
+        times += Dates.value(c.result.elapsed)
+    end
+
+    api_config["endpoint"] = last_endpoint
+
+    return times/tries
+end
+
+function bapi_test_all_endpoints()
+    endpoints = ["api", "api1", "api2", "api3"]
+
+    @info "Checking endpoints."
+    times = []
+    for e in endpoints
+        push!(times, (e, bapi_test_endpoint(e)))
+    end
+
+    best_endpoint = sort(times, rev=false, by = x -> x[2])[1]
+    api_config["endpoint"] = best_endpoint[1]
+
+    @info "Best endpoint $(best_endpoint[1]) (PING $(best_endpoint[2]) ms)"
+
+    return times
+end
+
 function bapi_endpoint()
-    api_endpoint = "api" #api1 api2 api3
+    api_endpoint = api_config["endpoint"] #api api1 api2 api3
     api_version = "v3"
     url = "https://$api_endpoint.binance.com/api/$api_version/"
     return url
 end
 
-function bapi_get(url::String, headers::Vector{Any}=[])
+function bapi_get(url::String, headers::Vector{Any}=[] ; verbose::Bool=true)
     time_i = now()
     request = HTTP.request("GET", url, headers)
     time_e = now()
     elapsed = time_e - time_i
     timestamp = time_e - div(elapsed,2)
-    @info "GET $url"
+    if verbose
+        @info "GET $url"
+    end
     return request, timestamp, elapsed
 end
 
-function bapi_post(url::String, headers::Vector{Any}=[])
+function bapi_post(url::String, headers::Vector{Any}=[] ; verbose::Bool=true)
     time_i = now()
     request = HTTP.request("POST", url, headers)
     time_e = now()
     elapsed = time_e - time_i
     timestamp = time_e - div(elapsed,2)
-    @info "POST $url"
+    if verbose
+        @info "POST $url"
+    end
     return request, timestamp, elapsed
 end
 
@@ -206,7 +257,7 @@ function bapi_ws_subscribe_orderbook(symbol::String, channel::Channel, depth::In
     end
 end
 
-function bapi_ws_subscribe_streams(url::String, channel::Channel)
+function bapi_ws_subscribe_orderbook_streams(url::String, channel::Channel)
     """
     Subscribe to multiple streams order book and push updates to channel
     """
@@ -217,6 +268,34 @@ function bapi_ws_subscribe_streams(url::String, channel::Channel)
                 res = JSON3.read(readavailable(ws))
                 symbol = uppercase(split(res["stream"],"@")[1])
                 put!(channel, (bapi_map_orderbook(symbol, res["data"]), now()))
+            end
+        end
+    catch err
+        @warn "Stoping websocket orderbook stream." err
+        isa(err, InterruptException) || rethrow(err)
+        return 1
+    end
+end
+
+function bapi_map_ticker(symbol::String, data)
+    b = parse(Float64, data["b"])
+    B = parse(Float64, data["B"])
+    a = parse(Float64, data["a"])
+    A = parse(Float64, data["A"])
+    return BinanceAPITicker(symbol, Float64[b, B], Float64[a, A])
+end
+
+function bapi_ws_subscribe_bestticker_streams(url::String, channel::Channel)
+    """
+    Subscribe to multiple streams order book and push updates to channel
+    """
+    @debug "Starting websocket to fetch orderbook on stream." url
+    try
+        HTTP.WebSockets.open(url) do ws
+            while !eof(ws)
+                res = JSON3.read(readavailable(ws))
+                symbol = uppercase(split(res["stream"],"@")[1])
+                put!(channel, (bapi_map_ticker(symbol, res["data"]), now()))
             end
         end
     catch err
