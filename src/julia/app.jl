@@ -41,7 +41,6 @@ function main(test::Bool=true)
 
     order_fee = config["ORDER_FEE"]
     security_profit = config["SECURITY_PROFIT"]
-    order_maxage = Millisecond(config["ORDER_MAXAGE"])
     recvWindow = config["RECVWINDOW"]
 
     engine, last_balance= start_engine(config)
@@ -53,7 +52,7 @@ function main(test::Bool=true)
     try 
         while true
             timings.c_main_loop = time_microsec()
-            buysell_matrix, assets, quantities = get_buysell_matrix(symbol_dict, order_maxage)
+            buysell_matrix, assets, quantities = get_buysell_matrix(symbol_dict)
             symbols = [x for x in collect(values(symbol_dict)) if x.symbol.asset1 in assets && x.symbol.asset2 in assets]
             if length(symbols) >= 3
                 detected_arbitrage = arbitrage_iterative(buysell_matrix, assets, symbols, quantities, engine.safe_amounts)

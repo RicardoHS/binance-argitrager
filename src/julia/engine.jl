@@ -61,7 +61,6 @@ function engine_read_config(logging_file::String)
 
     config["ORDER_FEE"] = parse(Float64, retrieve(conf, "engine", "ORDER_FEE")) # 0.075%
     config["SECURITY_PROFIT"] = parse(Float64, retrieve(conf, "engine", "SECURITY_PROFIT")) # 0.1%
-    config["ORDER_MAXAGE"] = parse(Int64, retrieve(conf, "engine", "ORDER_MAXAGE")) # milliseconds
     config["RECVWINDOW"] = parse(Int64, retrieve(conf, "engine", "RECVWINDOW")) # milliseconds
     config["io"] = io
 
@@ -148,10 +147,9 @@ function update_symbols_dict!(symbols_dict::Dict{String, SymbolPrice}, ticker_ch
     end
 end
 
-function get_buysell_matrix(symbol_dict::Dict{String, SymbolPrice}, max_elapsed::Millisecond)
+function get_buysell_matrix(symbol_dict::Dict{String, SymbolPrice})
     @debug "Getting currency matrix."
-    valid_symbols_mask = [now() - x[2].timestamp for x in symbol_dict] .< max_elapsed
-    valid_symbols = collect(keys(symbol_dict))[valid_symbols_mask]
+    valid_symbols = collect(keys(symbol_dict))
     
     valid_assets = Set()
     for sym_name in valid_symbols
@@ -269,15 +267,16 @@ function make_arbitrage(arbitrage::ArbitrageIterative, recvWindow::Integer, test
     operations = Operation[]
     for (i, t) in enumerate(tasks)
         wait(t)
-        if test
-            continue
-        end
         response, elapsed = t.result
-        fills = [Fill(parse(Float64, x["price"]), 
+        if !test
+            fills = [Fill(parse(Float64, x["price"]), 
                       parse(Float64, x["qty"]),
                       parse(Float64, x["commission"]),
                       x["commissionAsset"]) for x in response["fills"]]
-        op = Operation(arbitrage.orders[i], fills, elapsed)
+            op = Operation(arbitrage.orders[i], fills, elapsed)
+        else
+            op = Operation(arbitrage.orders[i], [], elapsed)
+        end       
         push!(operations, op)
     end
 
