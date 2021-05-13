@@ -53,10 +53,10 @@ function main(test::Bool=true)
     try 
         while true
             timings.c_main_loop = time_microsec()
-            buysell_matrix, assets = get_buysell_matrix(symbol_dict, order_maxage)
-            symbols = [x.symbol for x in collect(values(symbol_dict)) if x.symbol.asset1 in assets && x.symbol.asset2 in assets]
+            buysell_matrix, assets, quantities = get_buysell_matrix(symbol_dict, order_maxage)
+            symbols = [x for x in collect(values(symbol_dict)) if x.symbol.asset1 in assets && x.symbol.asset2 in assets]
             if length(symbols) >= 3
-                detected_arbitrage = arbitrage_iterative(buysell_matrix, assets, symbols, engine.safe_amounts)
+                detected_arbitrage = arbitrage_iterative(buysell_matrix, assets, symbols, quantities)
                 timings.c_arbitrage = time_microsec()
 
                 if !isnothing(detected_arbitrage)
@@ -71,6 +71,7 @@ function main(test::Bool=true)
                         arbitrage_operation = ArbitrageOperation(detected_arbitrage, last_balance, new_balance, operations)
                         analyse_arbitrage_operation(arbitrage_operation, engine)
                         last_balance = new_balance
+                        bapi_test_all_endpoints()
                         break
                     else
                         @info "Arbitrage insecure." aer arbitrage_fees aer-arbitrage_fees security_profit aer - arbitrage_fees >= security_profit

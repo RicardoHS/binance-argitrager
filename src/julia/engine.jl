@@ -5,13 +5,6 @@ using ConfParser
 include("core.jl")
 include("binance.jl")
 
-struct SymbolPrice
-    symbol::ExchangeSymbol
-    ask::Float64
-    bid::Float64
-    timestamp::DateTime
-end
-
 struct Fill
     price::Float64
     quantity::Float64
@@ -45,7 +38,6 @@ struct ArbitrageEngine
     price_channel::Channel
     symbol_dict::Dict{String, SymbolPrice}
     symbols::Vector{ExchangeSymbol}
-    safe_amounts::Dict{String, Float64}
     prices_to_main_asset::Dict{String, Float64}
     config::Dict{Any, Any}
 end
@@ -83,7 +75,7 @@ function stop_task(task::Task)
     schedule(task, InterruptException(), error=true)
 end
 
-function get_full_streams_url(symbols_list::Vector{ExchangeSymbol})
+function get_full_streams_depth_url(symbols_list::Vector{ExchangeSymbol})
     full_string = "wss://stream.binance.com:9443/stream?streams="
     for s in symbols_list
         full_string = full_string * lowercase(s.name) * "@depth10@100ms/"
@@ -91,8 +83,16 @@ function get_full_streams_url(symbols_list::Vector{ExchangeSymbol})
     return String(chop(full_string)) #remove last char from string
 end
 
+function get_full_streams_bestticker_url(symbols_list::Vector{ExchangeSymbol})
+    full_string = "wss://stream.binance.com:9443/stream?streams="
+    for s in symbols_list
+        full_string = full_string * lowercase(s.name) * "@bookTicker/"
+    end
+    return String(chop(full_string)) #remove last char from string
+end
+
 function get_symbols(assets::Vector{String})
-    @info "Getting symbols using the assets."
+    @info "Getting symbols using the assets." assets
     symbols_matrix = bapi_symbols()
     valid_symbols = [(x[1],x[2],x[3]) for x in symbols_matrix if x[2] in assets && x[3] in assets]
 
@@ -126,29 +126,18 @@ function get_prices(symbols::Vector{ExchangeSymbol})
     return prices
 end
 
-function compute_prices(asks::Matrix{Float64}, bids::Matrix{Float64}, quantity::Float64)
-    asks_weights = incremental_subtract(quantity, asks[:,2]) - asks[:,2]
-    ask_price = mean_weighted(asks[:,1], asks_weights)
-
-    bids_weights = incremental_subtract(quantity, bids[:,2]) - bids[:,2]
-    bid_price = mean_weighted(bids[:,1], bids_weights)
-    
-    return ask_price, bid_price
-end
-
 function init_symbols_dict(symbols_list)
     @debug "Initiating the symbols dictionary"
     time_now = now()
-    return Dict{String, SymbolPrice}([[s.name, SymbolPrice(s, 0, 0, time_now)] for s in symbols_list])
+    return Dict{String, SymbolPrice}([[s.name, SymbolPrice(s, 0, 0, 0, 0, time_now)] for s in symbols_list])
 end
 
-function update_symbols_dict!(symbols_dict::Dict{String, SymbolPrice}, orderbook_channel::Channel, safe_quantities::Dict{String, Float64})
-    for item in orderbook_channel
+function update_symbols_dict!(symbols_dict::Dict{String, SymbolPrice}, ticker_channel::Channel)
+    for item in ticker_channel
         try
-            orderbook, timestamp = item
-            ask, bid = compute_prices(orderbook.asks, orderbook.bids, safe_quantities[orderbook.symbol])
-            current_symbol = symbols_dict[uppercase(orderbook.symbol)]
-            sym_price = SymbolPrice(current_symbol.symbol, ask, bid, timestamp)
+            ticker, timestamp = item
+            current_symbol = symbols_dict[uppercase(ticker.symbol)]
+            sym_price = SymbolPrice(current_symbol.symbol, ticker.ask[1], ticker.ask[2],  ticker.bid[1], ticker.bid[2], timestamp)
             symbols_dict[sym_price.symbol.name] = sym_price
         catch err
             @warn "Stoping update symbol dict sub-task." err
@@ -173,6 +162,7 @@ function get_buysell_matrix(symbol_dict::Dict{String, SymbolPrice}, max_elapsed:
     n = length(valid_assets)
     buysell_matrix = zeros(n,n)
 
+    quantities = Dict{String, Vector{Float64}}()
     for sym_name in valid_symbols
         ask = symbol_dict[sym_name].ask
         bid = symbol_dict[sym_name].bid
@@ -182,9 +172,12 @@ function get_buysell_matrix(symbol_dict::Dict{String, SymbolPrice}, max_elapsed:
         asset2_pos = findfirst(isequal(asset2), valid_assets)
         buysell_matrix[asset1_pos, asset2_pos] = bid
         buysell_matrix[asset2_pos, asset1_pos] = ask
+        bid_qty = symbol_dict[sym_name].bid_qty
+        ask_qty = symbol_dict[sym_name].ask_qty
+        quantities[sym_name] = [bid_qty, ask_qty]
     end
 
-    return buysell_matrix, valid_assets
+    return buysell_matrix, valid_assets, quantities
 end
 
 function get_main_asset_pair_prices(symbols::Vector{ExchangeSymbol}, main_asset::String)::Dict{String,Float64}
@@ -207,33 +200,6 @@ function get_main_asset_pair_prices(symbols::Vector{ExchangeSymbol}, main_asset:
     end
 
     return prices_to_main_asset
-end
-
-function get_safe_amounts(symbols::Vector{ExchangeSymbol}, min_notional_multiplier::Float64, main_asset::String)::Dict{String, Float64}
-    max_safe_amounts = Dict()
-    prices = get_prices(symbols)
-    for s in symbols
-        price = prices[s.name]
-        min_qty = get_safe_minqty(price, s)
-
-        if s.asset1 in keys(max_safe_amounts)
-            max_safe_amounts[s.asset1] = max(min_qty, max_safe_amounts[s.asset1])
-        else
-            max_safe_amounts[s.asset1] = min_qty
-        end
-    end
-
-    safe_amounts = Dict{String, Float64}()
-    for s in symbols
-        final_safe_amount = max_safe_amounts[s.asset1]*min_notional_multiplier
-        safe_amounts[s.name] = get_safe_qty(final_safe_amount, s)
-
-        if s.asset1 != main_asset
-            @info "Safe amount for symbol $(s.name) => $(round(final_safe_amount, digits=8)) ($(round(final_safe_amount*prices[s.asset1*main_asset], digits=2)) $main_asset)"
-        end
-    end
-
-    return safe_amounts
 end
 
 function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation, engine::ArbitrageEngine)
@@ -293,7 +259,8 @@ end
 function start_engine(config::Dict{Any, Any})
     main_asset = config["MAIN_ASSET"]
     symbols_list = get_symbols(config["ASSETS"])
-    safe_amounts = get_safe_amounts(symbols_list, config["MIN_NOTIONAL_MULTIPLIER"], main_asset)
+
+    # TODO: Modify whole app to use only the best ticker data (not the orderbook).
     prices_to_main_asset = get_main_asset_pair_prices(symbols_list, main_asset)
 
     ##################
@@ -308,11 +275,11 @@ function start_engine(config::Dict{Any, Any})
     @info "Starting engine."
 
     @info "Starting prices sub-tasks."
-    orderbook_channel = Channel{Tuple{BinanceAPIOrderBook, DateTime}}(length(symbols_list)*100)
-    loop_tasks = [@async bapi_ws_subscribe_streams(get_full_streams_url(symbols_list), orderbook_channel)]
+    ticker_channel = Channel{Tuple{BinanceAPITicker, DateTime}}(length(symbols_list)*100)
+    loop_tasks = [@async bapi_ws_subscribe_bestticker_streams(get_full_streams_bestticker_url(symbols_list), ticker_channel)]
     
     @info "Starting update symbol dict sub-task."
-    dict_task = @async update_symbols_dict!(symbols_dict, orderbook_channel, safe_amounts)
+    dict_task = @async update_symbols_dict!(symbols_dict, ticker_channel)
 
-    return ArbitrageEngine(loop_tasks, dict_task, orderbook_channel, symbols_dict, symbols_list, safe_amounts, prices_to_main_asset, config), last_balance
+    return ArbitrageEngine(loop_tasks, dict_task, ticker_channel, symbols_dict, symbols_list, prices_to_main_asset, config), last_balance
 end
