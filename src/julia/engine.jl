@@ -22,6 +22,7 @@ end
 struct Operation
     order::Order
     fills::Vector{Fill}
+    elapsed::Millisecond
 end
 
 struct Balance
@@ -247,14 +248,20 @@ function analyse_arbitrage_operation(arbitrage_operation::ArbitrageOperation, en
         asset = pre_bal.asset
         diff_free_balance = round(post_balance_dict[asset].free - pre_bal.free, digits=8)
         total_balance += engine.prices_to_main_asset[asset] * diff_free_balance
-        @info asset diff_free_balance
+        @info "$asset $(round(diff_free_balance, digits=8)) ($(diff_free_balance*engine.prices_to_main_asset[asset]) $main_asset)"
     end
 
     @info "Total Balance in main currency: $(round(total_balance, digits=8)) $main_asset"
 
+    total_commission = 0
+    total_fees = 0
     for op in arbitrage_operation.operations
+        for fill in of.fills
+            total_fees += fill.commission * engine.prices_to_main_asset[fill.commission_asset]
+        end
         @info op
     end
+    @info "Total commission: $(round(total_fees, digits=8)) $main_asset"
 end
 
 function make_arbitrage(arbitrage::ArbitrageIterative, recvWindow::Integer, test::Bool = true)
@@ -276,7 +283,7 @@ function make_arbitrage(arbitrage::ArbitrageIterative, recvWindow::Integer, test
                       parse(Float64, x["qty"]),
                       parse(Float64, x["commission"]),
                       x["commissionAsset"]) for x in response["fills"]]
-        op = Operation(arbitrage.orders[i], fills)
+        op = Operation(arbitrage.orders[i], fills, elapsed)
         push!(operations, op)
     end
 
