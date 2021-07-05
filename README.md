@@ -1,6 +1,8 @@
 # binance-argitrager
 My own arbitrage bot for the binance in-market. Detect and perform triangular arbitrage between assets in the binance market. It can be run in normal mode, or in test mode, in which the the BUY/SELL operations are not performed (but they are sent to the binance servers in order to check everything is ok).
 
+[binance api docs](https://binance-docs.github.io/apidocs/spot/en/#change-log)
+
 # Install
 ### julia
 Use the script `install_julia.sh` in the scripts folder to install the correct julia version.
