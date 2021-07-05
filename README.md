@@ -1,5 +1,5 @@
 # binance-argitrager
-My own arbitrage bot for the binance in-market. Detect and perform triangular arbitrage between assets in the binance market. 
+My own arbitrage bot for the binance in-market. Detect and perform triangular arbitrage between assets in the binance market. It can be run in normal mode, or in test mode, in which the the BUY/SELL operations are not performed (but they are sent to the binance servers in order to check everything is ok).
 
 # Install
 ### julia
@@ -13,7 +13,7 @@ julia src/julia/requirements.jl
 ```
 
 # Configuration
-In the `src/julia/config_default.ini` file you can find the default config file. Make a copy and rename it to `config.ini`, add the binance keys and change the involved assets. All assets need to have a minimum balance in order to run the arbitrage operations, the program check the balances on startup, so dont worry about this.
+In the `src/julia/config_default.ini` file you can find the default config file. Make a copy and rename it to `config.ini`, add the binance keys and change the involved assets. All assets need to have a minimum balance in order to run the arbitrage operations, the program compute the minimum balances on startup, so check the values on the log.
 
 # Execution
 
