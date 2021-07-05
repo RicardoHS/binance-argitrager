@@ -35,3 +35,8 @@ To start the real arbitrage.
 
 Profitable arbitrage operations need a lot of different expert knowledge in a bunch of different areas. This project is just a tinny part of a whole arbitrage system and it was more like a project to learn julia and cryptos than a project to earn money. Use it by your own responsibility.
 
+# Support
+
+If this has been helpful to you in any way, you can show me your support by buying me a coffee.
+
+<a href="https://www.buymeacoffee.com/ricardohs" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me A Coffee" width="250"></a>
