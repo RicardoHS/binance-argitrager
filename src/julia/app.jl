@@ -35,6 +35,8 @@ function compute_times(timings::Timings, symbol_dict::Dict{String, SymbolPrice})
 end
 
 function main(test::Bool=true)
+    # TODO: Try other coins
+    # TODO: Improve connection times when posting orders to exchange
     logging_file = "" # "engine.debug"
     config = engine_read_config(logging_file)
     bapi_read_config()
@@ -71,7 +73,7 @@ function main(test::Bool=true)
                         analyse_arbitrage_operation(arbitrage_operation, engine)
                         last_balance = new_balance
                         bapi_test_all_endpoints()
-                        break
+                        #break
                     else
                         @info "Arbitrage insecure." aer arbitrage_fees aer-arbitrage_fees security_profit aer - arbitrage_fees >= security_profit
                     end

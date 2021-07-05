@@ -215,6 +215,7 @@ function get_safe_amounts(symbols::Vector{ExchangeSymbol}, min_notional_multipli
         end
     end
 
+    # TODO: Improve this to avoid cases when there is no valid symbol, e.g. "LINKUPBTC"
     safe_amounts = Dict{String, Float64}()
     for s in symbols
         final_safe_amount = max_safe_amounts[s.asset1]*min_notional_multiplier
